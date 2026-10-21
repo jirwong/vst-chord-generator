@@ -158,14 +158,13 @@ text + key + voicing settings
 ### 4.4 Plan publication
 
 Parsing and voicing run on the message thread. A successful parse builds an
-immutable `RenderPlan`. Plans are double-buffered in the processor and published
-to the audio thread through an atomic index, with a published/observed generation
-handshake.
+immutable `RenderPlan`. Plans are triple-buffered in the processor and published
+to the audio thread through atomic `published` and `observed` indices.
 
-- The audio thread reads the active plan and never allocates, locks, or destroys
-  a plan.
-- The message thread writes only the inactive slot, and only after the audio
-  thread has observed the currently published plan.
+- The audio thread reads the published slot and never allocates, locks, or
+  destroys a plan.
+- The message thread writes a slot that is neither published nor observed, so it
+  never overwrites a plan the audio thread may be reading.
 - An invalid parse leaves the previous plan active.
 - A plan change, stop, seek, or bypass releases active notes before new events
   are scheduled.
