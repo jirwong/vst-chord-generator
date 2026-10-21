@@ -1,4 +1,5 @@
 #include "Check.h"
+#include "Plugin/ClipDragComponent.h"
 #include "Plugin/PluginProcessor.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -884,6 +885,41 @@ int main()
         const auto file = p.createDragClipFile (error);
         CHECK (! file.existsAsFile());
         CHECK (error.isNotEmpty());
+    }
+
+    // clip preview enables only for a valid non-empty plan
+    {
+        ChordTextAudioProcessor p;
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        CHECK (editor != nullptr);
+
+        auto* clip = dynamic_cast<ClipDragComponent*> (
+            editor->findChildWithID ("clipDrag"));
+        auto* reveal = dynamic_cast<juce::TextButton*> (
+            editor->findChildWithID ("revealClip"));
+        auto* progression = dynamic_cast<juce::TextEditor*> (
+            editor->findChildWithID ("progressionEditor"));
+        CHECK (clip != nullptr);
+        CHECK (reveal != nullptr);
+        CHECK (progression != nullptr);
+
+        clip->setLoopInfo (16.0, true);
+        CHECK (clip->isEnabled());
+        clip->setLoopInfo (0.0, false);
+        CHECK (! clip->isEnabled());
+        clip->setLoopInfo (16.0, true);
+        CHECK (! reveal->isEnabled());
+
+        const auto file = clip->createClipFile();
+        CHECK (file.existsAsFile());
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+        CHECK (reveal->isEnabled());
+        file.deleteFile();
+
+        progression->setText ("H", juce::dontSendNotification);
+        const auto invalidFile = clip->createClipFile();
+        CHECK (invalidFile == juce::File());
+        CHECK (! p.getDiagnostics().empty());
     }
 
     return reportAndExit();

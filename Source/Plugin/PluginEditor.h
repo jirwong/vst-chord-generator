@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ClipDragComponent.h"
 #include "PluginProcessor.h"
 
 #include <memory>
@@ -72,6 +73,8 @@ private:
     juce::ToggleButton loopButton { "Loop" };
     juce::TextButton exportButton { "Export .mid" };
     RegenerateButton regenerateButton;
+    juce::TextButton revealClipButton { "Reveal last clip" };
+    ClipDragComponent clipDrag;
     juce::Label statusLabel;
     juce::TextEditor diagnosticsDisplay;
     LearningTableModel tableModel;

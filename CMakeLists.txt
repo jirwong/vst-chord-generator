@@ -26,7 +26,8 @@ set(THEORY_SOURCES
     Source/Theory/RenderPlan.cpp)
 set(PLUGIN_SOURCES
     Source/Plugin/PluginProcessor.cpp
-    Source/Plugin/PluginEditor.cpp)
+    Source/Plugin/PluginEditor.cpp
+    Source/Plugin/ClipDragComponent.cpp)
 
 juce_add_plugin(ChordText
     COMPANY_NAME "jirwo"
@@ -62,7 +63,8 @@ target_include_directories(ProcessorTests PRIVATE Source)
 target_compile_definitions(ProcessorTests PRIVATE
     "JucePlugin_Name=\"Chord Text\""
     JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0)
+    JUCE_USE_CURL=0
+    JUCE_MODAL_LOOPS_PERMITTED=1)
 target_link_libraries(ProcessorTests PRIVATE
     juce::juce_audio_utils
     juce::juce_recommended_config_flags

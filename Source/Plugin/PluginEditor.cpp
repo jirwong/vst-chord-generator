@@ -130,6 +130,45 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
         refreshStatus();
     };
 
+    revealClipButton.setComponentID ("revealClip");
+    revealClipButton.setEnabled (false);
+    revealClipButton.onClick = [this]
+    {
+        const auto file = processor.getLastDragClipFile();
+
+        if (file.existsAsFile())
+            file.revealToUser();
+    };
+
+    clipDrag.setComponentID ("clipDrag");
+    clipDrag.createClipFile = [this]
+    {
+        applyProgressionText (true);
+
+        if (! processor.getDiagnostics().empty())
+        {
+            lastExportStatus = "Fix the progression errors before dragging.";
+            refreshStatus();
+            return juce::File();
+        }
+
+        juce::String error;
+        const auto file = processor.createDragClipFile (error);
+
+        if (file == juce::File())
+        {
+            lastExportStatus = "Drag failed: " + error;
+            refreshStatus();
+        }
+
+        return file;
+    };
+    clipDrag.onStatus = [this] (const juce::String& status)
+    {
+        lastExportStatus = status;
+        refreshStatus();
+    };
+
     tableModel.setCurrentStep (-1);
     table.setModel (&tableModel);
     table.setComponentID ("learningTable");
@@ -160,6 +199,8 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     addAndMakeVisible (loopButton);
     addAndMakeVisible (exportButton);
     addAndMakeVisible (regenerateButton);
+    addAndMakeVisible (revealClipButton);
+    addAndMakeVisible (clipDrag);
     addAndMakeVisible (statusLabel);
     addAndMakeVisible (diagnosticsDisplay);
     addAndMakeVisible (table);
@@ -230,11 +271,16 @@ void ChordTextAudioProcessorEditor::resized()
     auto statusRow = bounds.removeFromTop (28);
     exportButton.setBounds (statusRow.removeFromRight (140));
     statusRow.removeFromRight (8);
+    revealClipButton.setBounds (statusRow.removeFromRight (140));
+    statusRow.removeFromRight (8);
     statusLabel.setBounds (statusRow);
     bounds.removeFromTop (6);
 
     auto diagnosticsArea = bounds.removeFromBottom (68);
     bounds.removeFromBottom (6);
+
+    clipDrag.setBounds (bounds.removeFromBottom (48));
+    bounds.removeFromBottom (8);
 
     table.setBounds (bounds);
     diagnosticsDisplay.setBounds (diagnosticsArea);
@@ -340,9 +386,19 @@ void ChordTextAudioProcessorEditor::refreshStatus()
         diagnosticsDisplay.setText (diagnosticsText, juce::dontSendNotification);
     }
 
+    const auto rows = processor.getLearningRows();
+    double totalBeats = 0.0;
+
+    for (const auto& row : rows)
+        totalBeats += row.durationBeats;
+
+    const bool canDrag = diagnostics.empty() && ! rows.empty();
+    clipDrag.setLoopInfo (totalBeats, canDrag);
+    revealClipButton.setEnabled (processor.getLastDragClipFile().existsAsFile());
+
     const auto canExport = fileChooser == nullptr
                            && diagnostics.empty()
-                           && ! processor.getLearningRows().empty();
+                           && ! rows.empty();
 
     if (exportButton.isEnabled() != canExport)
         exportButton.setEnabled (canExport);
