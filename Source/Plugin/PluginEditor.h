@@ -38,9 +38,19 @@ private:
     };
 
     void timerCallback() override;
-    void applyProgressionText();
+    void applyProgressionText (bool force);
     void startExport();
     void refreshStatus();
+
+    // The base Button implementation dispatches triggerClick() asynchronously,
+    // but Regenerate is specified to rebuild before the call returns.
+    class RegenerateButton final : public juce::TextButton
+    {
+    public:
+        RegenerateButton() : juce::TextButton ("Regenerate") {}
+
+        void triggerClick() override;
+    };
 
     juce::String buildStatusText() const;
     juce::String describeDiagnostic (const chordtext::Diagnostic&) const;
@@ -61,6 +71,7 @@ private:
     juce::Slider velocitySlider;
     juce::ToggleButton loopButton { "Loop" };
     juce::TextButton exportButton { "Export .mid" };
+    RegenerateButton regenerateButton;
     juce::Label statusLabel;
     juce::TextEditor diagnosticsDisplay;
     LearningTableModel tableModel;

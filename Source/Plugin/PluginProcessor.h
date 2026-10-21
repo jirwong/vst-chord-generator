@@ -15,6 +15,7 @@ struct LearningRow
     juce::String chord;
     juce::String degree;
     juce::String notes;
+    double durationBeats = 4.0;
 };
 
 class ChordTextAudioProcessor final : public juce::AudioProcessor,

@@ -768,8 +768,44 @@ int main()
         if (editor != nullptr)
         {
             CHECK (editor->getWidth() == 760);
-            CHECK (editor->getHeight() == 560);
+            CHECK (editor->getHeight() == 640);
         }
+    }
+
+    // learning rows carry the effective duration in beats
+    {
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("Cmaj7:2, G7");
+        const auto rows = p.getLearningRows();
+        CHECK (rows.size() == 2);
+        CHECK_NEAR (rows[0].durationBeats, 2.0, 1e-9);
+        CHECK_NEAR (rows[1].durationBeats, 4.0, 1e-9);
+    }
+
+    // editor exposes the new controls and can force a rebuild
+    {
+        ChordTextAudioProcessor p;
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        CHECK (editor != nullptr);
+        CHECK (editor->getWidth() == 760);
+        CHECK (editor->getHeight() == 640);
+
+        auto* progression = dynamic_cast<juce::TextEditor*> (
+            editor->findChildWithID ("progressionEditor"));
+        auto* regenerate = dynamic_cast<juce::TextButton*> (
+            editor->findChildWithID ("regenerateButton"));
+        CHECK (progression != nullptr);
+        CHECK (regenerate != nullptr);
+
+        progression->setText ("C", juce::dontSendNotification);
+        regenerate->triggerClick();
+        CHECK (p.getLearningRows().size() == 1);
+        CHECK (p.getLearningRows()[0].chord == "C");
+
+        progression->setText ("H", juce::dontSendNotification);
+        regenerate->triggerClick();
+        CHECK (p.getLearningRows().size() == 1);
+        CHECK (! p.getDiagnostics().empty());
     }
 
     return reportAndExit();

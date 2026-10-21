@@ -1,12 +1,13 @@
 #include "PluginEditor.h"
 
+#include <cmath>
 #include <cstddef>
 #include <utility>
 
 namespace
 {
 constexpr int editorWidth = 760;
-constexpr int editorHeight = 560;
+constexpr int editorHeight = 640;
 constexpr int timerFrequencyHz = 30;
 constexpr double debounceMilliseconds = 150.0;
 constexpr int rowHeight = 24;
@@ -28,6 +29,22 @@ void configureLabel (juce::Label& label, const juce::String& text, juce::Colour 
     label.setColour (juce::Label::textColourId, colour);
     label.setInterceptsMouseClicks (false, false);
 }
+
+juce::String formatBeats (double beats)
+{
+    if (std::abs (beats - std::round (beats)) < 1e-9)
+        return juce::String (static_cast<int> (std::lround (beats)));
+
+    auto text = juce::String (beats, 3);
+
+    while (text.endsWithChar ('0'))
+        text = text.dropLastCharacters (1);
+
+    if (text.endsWithChar ('.'))
+        text = text.dropLastCharacters (1);
+
+    return text;
+}
 } // namespace
 
 ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProcessor& p)
@@ -48,6 +65,7 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     progressionEditor.setMultiLine (true, true);
     progressionEditor.setReturnKeyStartsNewLine (true);
     progressionEditor.setScrollbarsShown (true);
+    progressionEditor.setComponentID ("progressionEditor");
     progressionEditor.setText (processor.getProgressionText(), juce::dontSendNotification);
     progressionEditor.setColour (juce::TextEditor::backgroundColourId, panelColour);
     progressionEditor.setColour (juce::TextEditor::textColourId, textColour);
@@ -105,17 +123,27 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     exportButton.onClick = [this] { startExport(); };
     exportButton.setEnabled (false);
 
+    regenerateButton.setComponentID ("regenerateButton");
+    regenerateButton.onClick = [this]
+    {
+        applyProgressionText (true);
+        refreshStatus();
+    };
+
     tableModel.setCurrentStep (-1);
     table.setModel (&tableModel);
+    table.setComponentID ("learningTable");
     table.setRowHeight (rowHeight);
     table.setColour (juce::TableListBox::backgroundColourId, panelColour);
     table.setColour (juce::TableListBox::outlineColourId, outlineColour);
     table.setOutlineThickness (1);
-    table.getHeader().addColumn ("Chord", 1, 176, 40, -1,
+    table.getHeader().addColumn ("Chord", 1, 150, 40, -1,
                                  juce::TableHeaderComponent::notSortable);
-    table.getHeader().addColumn ("Degree", 2, 192, 40, -1,
+    table.getHeader().addColumn ("Degree", 2, 150, 40, -1,
                                  juce::TableHeaderComponent::notSortable);
-    table.getHeader().addColumn ("Notes", 3, 348, 40, -1,
+    table.getHeader().addColumn ("Notes", 3, 300, 40, -1,
+                                 juce::TableHeaderComponent::notSortable);
+    table.getHeader().addColumn ("Beats", 4, 70, 40, -1,
                                  juce::TableHeaderComponent::notSortable);
     table.getHeader().setColour (juce::TableHeaderComponent::backgroundColourId,
                                  juce::Colour (0xff303034));
@@ -131,6 +159,7 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     addAndMakeVisible (velocitySlider);
     addAndMakeVisible (loopButton);
     addAndMakeVisible (exportButton);
+    addAndMakeVisible (regenerateButton);
     addAndMakeVisible (statusLabel);
     addAndMakeVisible (diagnosticsDisplay);
     addAndMakeVisible (table);
@@ -154,7 +183,7 @@ ChordTextAudioProcessorEditor::~ChordTextAudioProcessorEditor()
 
     // Do not lose a pending debounced edit when the editor closes.
     if (textEditPending)
-        applyProgressionText();
+        applyProgressionText (false);
 
     fileChooser = nullptr;
 }
@@ -168,7 +197,10 @@ void ChordTextAudioProcessorEditor::resized()
 {
     auto bounds = getLocalBounds().reduced (16);
 
-    progressionLabel.setBounds (bounds.removeFromTop (18));
+    auto progressionHeader = bounds.removeFromTop (22);
+    regenerateButton.setBounds (progressionHeader.removeFromRight (110));
+    progressionHeader.removeFromRight (8);
+    progressionLabel.setBounds (progressionHeader);
     progressionEditor.setBounds (bounds.removeFromTop (104));
     bounds.removeFromTop (12);
 
@@ -212,7 +244,7 @@ void ChordTextAudioProcessorEditor::timerCallback()
 {
     if (textEditPending
         && juce::Time::getMillisecondCounterHiRes() - lastTextEditMs >= debounceMilliseconds)
-        applyProgressionText();
+        applyProgressionText (false);
 
     if (tableModel.setRows (processor.getLearningRows()))
         table.updateContent();
@@ -223,14 +255,21 @@ void ChordTextAudioProcessorEditor::timerCallback()
     refreshStatus();
 }
 
-void ChordTextAudioProcessorEditor::applyProgressionText()
+void ChordTextAudioProcessorEditor::applyProgressionText (bool force)
 {
     textEditPending = false;
-
     const auto text = progressionEditor.getText();
 
-    if (text != processor.getProgressionText())
+    if (force || text != processor.getProgressionText())
         processor.setProgressionText (text);
+}
+
+void ChordTextAudioProcessorEditor::RegenerateButton::triggerClick()
+{
+    // Button::triggerClick() posts an asynchronous command message. A forced
+    // regenerate must update the plan before the call returns.
+    if (onClick != nullptr)
+        onClick();
 }
 
 void ChordTextAudioProcessorEditor::startExport()
@@ -373,7 +412,8 @@ bool ChordTextAudioProcessorEditor::LearningTableModel::setRows (
         {
             if (rows[index].chord != newRows[index].chord
                 || rows[index].degree != newRows[index].degree
-                || rows[index].notes != newRows[index].notes)
+                || rows[index].notes != newRows[index].notes
+                || rows[index].durationBeats != newRows[index].durationBeats)
             {
                 unchanged = false;
                 break;
@@ -423,6 +463,7 @@ void ChordTextAudioProcessorEditor::LearningTableModel::paintCell (
         case 1: text = row->chord; break;
         case 2: text = row->degree; break;
         case 3: text = row->notes; break;
+        case 4: text = formatBeats (row->durationBeats); break;
         default: break;
     }
 

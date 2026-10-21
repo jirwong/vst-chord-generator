@@ -268,6 +268,7 @@ void ChordTextAudioProcessor::rebuildPlan()
         row.chord = step.chord.symbol();
         row.degree = chordtext::degreeLabel (step.chord, key);
         row.notes = notesForVoicing (step.chord, voicings[index]);
+        row.durationBeats = step.durationBeats;
         learningRows.push_back (std::move (row));
     }
 }
