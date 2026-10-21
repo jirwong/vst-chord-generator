@@ -17,7 +17,8 @@ add_subdirectory(libs/JUCE)
 
 set(THEORY_SOURCES
     Source/Theory/Note.cpp
-    Source/Theory/Key.cpp)
+    Source/Theory/Key.cpp
+    Source/Theory/Chord.cpp)
 set(PLUGIN_SOURCES Source/Plugin/PluginProcessor.cpp)
 
 juce_add_plugin(ChordText
