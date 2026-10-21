@@ -21,7 +21,9 @@ set(THEORY_SOURCES
     Source/Theory/Chord.cpp
     Source/Theory/ChordSymbolParser.cpp
     Source/Theory/RomanNumeralParser.cpp
-    Source/Theory/Progression.cpp)
+    Source/Theory/Progression.cpp
+    Source/Theory/Voicer.cpp
+    Source/Theory/RenderPlan.cpp)
 set(PLUGIN_SOURCES Source/Plugin/PluginProcessor.cpp)
 
 juce_add_plugin(ChordText

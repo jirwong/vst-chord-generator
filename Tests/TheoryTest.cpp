@@ -4,6 +4,8 @@
 #include "Theory/Key.h"
 #include "Theory/Note.h"
 #include "Theory/Progression.h"
+#include "Theory/RenderPlan.h"
+#include "Theory/Voicer.h"
 
 using namespace chordtext;
 
@@ -123,6 +125,39 @@ int main()
     CHECK (progression ("", cMajor).diagnostics.empty());
     CHECK (progression ("Cmaj7:0", cMajor).diagnostics.size() == 1);
     CHECK (progression ("Cmaj7:nan", cMajor).diagnostics.size() == 1);
+
+    const VoicingSettings rootPosition {VoicingMode::rootPosition, 48, 84};
+    const VoicingSettings voiceLed {VoicingMode::voiceLed, 48, 84};
+
+    CHECK ((voiceChord (chord ({'C', 0}, "maj7"), std::nullopt, rootPosition)
+           == std::vector<int> {48, 52, 55, 59}));
+    CHECK ((voiceChord (chord ({'C', 0}, "", {}, PitchClass {'E', 0}), std::nullopt, rootPosition)
+           == std::vector<int> {52, 60, 64, 67}));
+    CHECK ((voiceChord (chord ({'G', 0}, "7"), std::vector<int> {60, 64, 67, 71}, voiceLed)
+           == std::vector<int> {62, 65, 67, 71}));
+    CHECK ((voiceChord (chord ({'G', 0}, "7"), std::vector<int> {60, 64, 67, 71}, voiceLed)
+           != voiceChord (chord ({'G', 0}, "7"), std::vector<int> {60, 64, 67, 71}, rootPosition)));
+
+    Progression p;
+    p.steps.push_back ({chord ({'C', 0}, "maj7"), 4.0, "Cmaj7", 0});
+    p.steps.push_back ({chord ({'G', 0}, "7"), 4.0, "G7", 0});
+
+    auto rootVoicings = voiceProgression (p, rootPosition);
+    auto ledVoicings = voiceProgression (p, voiceLed);
+    CHECK ((rootVoicings == std::vector<std::vector<int>> {{48,52,55,59}, {55,59,62,65}}));
+    CHECK (ledVoicings == rootVoicings);
+
+    const auto plan = buildRenderPlan (p, rootVoicings, 100);
+    CHECK (plan.lengthBeats == 8.0);
+    CHECK (plan.events.size() == 16);
+    CHECK (plan.events.front().beat == 0.0);
+    CHECK (plan.events.front().noteOn);
+    CHECK (! plan.events[4].noteOn);          // first event at beat 4 is a note-off
+    CHECK (plan.events[4].beat == 4.0);
+    CHECK (plan.events[8].noteOn);            // note-ons follow the note-offs
+    CHECK (plan.events[8].beat == 4.0);
+    CHECK (plan.events.back().beat == 8.0);
+    CHECK (! plan.events.back().noteOn);
 
     return reportAndExit();
 }
