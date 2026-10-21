@@ -41,6 +41,9 @@ public:
     int getCurrentStep() const;
     void rebuildPlan(); // message thread only
 
+    // Message thread only. Uses the same plan as live playback.
+    bool exportMidiFile (const juce::File& file, juce::String& errorMessage);
+
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override;
     const juce::String getName() const override;
@@ -102,4 +105,5 @@ private:
     // Message thread only.
     std::vector<chordtext::Diagnostic> diagnostics;
     std::vector<LearningRow> learningRows;
+    chordtext::RenderPlan exportPlan;
 };

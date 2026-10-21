@@ -275,6 +275,8 @@ void ChordTextAudioProcessor::publishPlan (chordtext::RenderPlan plan)
 {
     ++nextPlanGeneration;
 
+    exportPlan = plan;
+
     auto& slot = planSlots[static_cast<std::size_t> (writePlanIndex)];
     slot.plan = std::move (plan);
     slot.generation = nextPlanGeneration;
@@ -284,6 +286,95 @@ void ChordTextAudioProcessor::publishPlan (chordtext::RenderPlan plan)
         std::memory_order_acq_rel);
 
     writePlanIndex = static_cast<int> (previous & planIndexMask);
+}
+
+bool ChordTextAudioProcessor::exportMidiFile (const juce::File& file,
+                                              juce::String& errorMessage)
+{
+    errorMessage.clear();
+
+    if (! diagnostics.empty())
+    {
+        errorMessage = "Cannot export while the progression has errors.";
+        return false;
+    }
+
+    if (exportPlan.events.empty())
+    {
+        errorMessage = "Cannot export an empty progression.";
+        return false;
+    }
+
+    auto bpm = 120.0;
+
+    if (auto* hostPlayHead = getPlayHead())
+    {
+        const auto position = hostPlayHead->getPosition();
+
+        if (position)
+        {
+            const auto hostBpm = position->getBpm();
+
+            if (hostBpm && std::isfinite (*hostBpm) && *hostBpm > 0.0)
+                bpm = *hostBpm;
+        }
+    }
+
+    constexpr double ticksPerQuarterNote = 960.0;
+
+    juce::MidiFile midiFile;
+    midiFile.setTicksPerQuarterNote (static_cast<int> (ticksPerQuarterNote));
+
+    juce::MidiMessageSequence sequence;
+    sequence.addEvent (juce::MidiMessage::textMetaEvent (3, "Chord Text"), 0.0);
+    sequence.addEvent (juce::MidiMessage::tempoMetaEvent (
+                           static_cast<int> (std::lround (60000000.0 / bpm))),
+                       0.0);
+    sequence.addEvent (juce::MidiMessage::timeSignatureMetaEvent (4, 4), 0.0);
+
+    auto events = exportPlan.events;
+    std::stable_sort (events.begin(), events.end(),
+                      [] (const chordtext::MidiEvent& left, const chordtext::MidiEvent& right)
+                      {
+                          if (left.beat != right.beat)
+                              return left.beat < right.beat;
+
+                          if (left.noteOn != right.noteOn)
+                              return ! left.noteOn;
+
+                          return left.pitch < right.pitch;
+                      });
+
+    for (const auto& event : events)
+    {
+        const auto tick = static_cast<double> (
+            std::llround (event.beat * ticksPerQuarterNote));
+        const auto message = event.noteOn
+            ? juce::MidiMessage::noteOn (event.channel, event.pitch,
+                                         static_cast<juce::uint8> (event.velocity))
+            : juce::MidiMessage::noteOff (event.channel, event.pitch,
+                                          static_cast<juce::uint8> (0));
+
+        sequence.addEvent (message, tick);
+    }
+
+    midiFile.addTrack (sequence);
+
+    juce::FileOutputStream output (file);
+
+    if (! output.openedOk())
+    {
+        errorMessage = "Cannot open " + file.getFullPathName() + " for writing.";
+        return false;
+    }
+
+    if (! midiFile.writeTo (output))
+    {
+        errorMessage = "Cannot write the MIDI file " + file.getFullPathName() + ".";
+        return false;
+    }
+
+    return true;
 }
 
 void ChordTextAudioProcessor::prepareToPlay (double sampleRate, int)

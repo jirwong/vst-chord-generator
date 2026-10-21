@@ -564,5 +564,82 @@ int main()
         CHECK (! p.isTransportAvailable());
     }
 
+    // export writes a readable file with tempo and paired notes
+    {
+        FakePlayHead head;
+        head.set (0.0, true, 120.0);
+        ChordTextAudioProcessor p;
+        p.setPlayHead (&head);
+        p.setProgressionText ("Cmaj7, G7");
+        p.prepareToPlay (48000.0, 512);
+
+        const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                              .getNonexistentChildFile ("chordtext-test", ".mid");
+        juce::String error;
+        CHECK (p.exportMidiFile (file, error));
+        CHECK (error.isEmpty());
+
+        juce::FileInputStream in (file);
+        CHECK (in.openedOk());
+        juce::MidiFile midiFile;
+        CHECK (midiFile.readFrom (in));
+        CHECK (midiFile.getTimeFormat() == 960);
+        CHECK (midiFile.getNumTracks() >= 1);
+
+        int noteOns = 0, noteOffs = 0, tempoEvents = 0;
+        std::vector<double> noteOnTicks;
+        for (int t = 0; t < midiFile.getNumTracks(); ++t)
+        {
+            const auto* track = midiFile.getTrack (t);
+            for (int i = 0; i < track->getNumEvents(); ++i)
+            {
+                const auto* event = track->getEventPointer (i);
+                const auto message = event->message;
+                if (message.isNoteOn())
+                {
+                    ++noteOns;
+                    noteOnTicks.push_back (message.getTimeStamp());
+                }
+                if (message.isNoteOff()) ++noteOffs;
+                if (message.isTempoMetaEvent())
+                {
+                    ++tempoEvents;
+                    CHECK_NEAR (message.getTempoSecondsPerQuarterNote(), 0.5, 0.001);
+                }
+            }
+        }
+
+        CHECK (noteOns == 8);
+        CHECK (noteOffs == 8);
+        CHECK (tempoEvents >= 1);
+        CHECK (noteOnTicks.size() == 8);
+        for (int i = 0; i < 4; ++i)
+            CHECK (noteOnTicks[(size_t) i] == 0.0);
+        for (int i = 4; i < 8; ++i)
+            CHECK (noteOnTicks[(size_t) i] == 4.0 * 960.0);
+
+        file.deleteFile();
+    }
+
+    // export is rejected for invalid text and for an empty plan
+    {
+        const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                              .getNonexistentChildFile ("chordtext-test", ".mid");
+
+        ChordTextAudioProcessor invalid;
+        invalid.setProgressionText ("H");
+        juce::String invalidError;
+        CHECK (! invalid.exportMidiFile (file, invalidError));
+        CHECK (! invalidError.isEmpty());
+        CHECK (! file.existsAsFile());
+
+        ChordTextAudioProcessor empty;
+        empty.setProgressionText ("");
+        juce::String emptyError;
+        CHECK (! empty.exportMidiFile (file, emptyError));
+        CHECK (! emptyError.isEmpty());
+        CHECK (! file.existsAsFile());
+    }
+
     return reportAndExit();
 }
