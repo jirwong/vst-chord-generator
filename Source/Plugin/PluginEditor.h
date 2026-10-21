@@ -62,7 +62,7 @@ private:
     juce::ToggleButton loopButton { "Loop" };
     juce::TextButton exportButton { "Export .mid" };
     juce::Label statusLabel;
-    juce::Label diagnosticsLabel;
+    juce::TextEditor diagnosticsDisplay;
     LearningTableModel tableModel;
     juce::TableListBox table;
 

@@ -19,6 +19,8 @@ public:
 
     juce::Optional<PositionInfo> getPosition() const override
     {
+        ++positionCalls;
+
         PositionInfo info;
         info.setPpqPosition (ppq);
         info.setBpm (bpm);
@@ -26,10 +28,13 @@ public:
         return info;
     }
 
+    int getPositionCalls() const { return positionCalls; }
+
 private:
     double ppq = 0.0;
     bool playing = true;
     double bpm = 120.0;
+    mutable int positionCalls = 0;
 };
 
 static std::vector<int> noteOnPitches (const juce::MidiBuffer& midi)
@@ -98,6 +103,37 @@ static int choiceIndex (ChordTextAudioProcessor& p, const char* id)
     return parameter != nullptr ? parameter->getIndex() : -1;
 }
 
+static bool readFirstTempo (const juce::File& file, double& secondsPerQuarter)
+{
+    juce::FileInputStream in (file);
+
+    if (! in.openedOk())
+        return false;
+
+    juce::MidiFile midiFile;
+
+    if (! midiFile.readFrom (in))
+        return false;
+
+    for (int track = 0; track < midiFile.getNumTracks(); ++track)
+    {
+        const auto* sequence = midiFile.getTrack (track);
+
+        for (int index = 0; index < sequence->getNumEvents(); ++index)
+        {
+            const auto message = sequence->getEventPointer (index)->message;
+
+            if (message.isTempoMetaEvent())
+            {
+                secondsPerQuarter = message.getTempoSecondsPerQuarterNote();
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
@@ -123,6 +159,7 @@ int main()
         CHECK (pitches.size() == 4);
         CHECK (pitchSum == 48 + 52 + 55 + 59);
         CHECK (midi.getFirstEventTime() == 0);
+        CHECK (p.isPlayheadAvailable());
 
         for (const auto metadata : midi)
         {
@@ -170,6 +207,8 @@ int main()
         CHECK (countNoteOffs (stopped) == 4);
         CHECK (noteOnPitches (stopped).empty());
         CHECK ((sortedUnique (noteOffPitches (stopped)) == std::vector<int> {48, 52, 55, 59}));
+        CHECK (! p.isTransportAvailable());
+        CHECK (p.isPlayheadAvailable());
     }
 
     // bypass releases active notes
@@ -282,6 +321,7 @@ int main()
         CHECK (rows.size() == 4 && rows[0].degree == "Imaj7");
         CHECK (rows.size() == 4 && rows[0].notes == "C E G B");
         CHECK (p.getProgressionText() == "Cmaj7, Am7, Dm7, G7");
+        CHECK (p.getProgramName (0) == "Default");
     }
 
     // key change updates the parsed rows and generated pitches
@@ -534,6 +574,33 @@ int main()
         CHECK (! p.isTransportAvailable());
     }
 
+    // re-preparing releases notes that were sounding at sample 0
+    {
+        FakePlayHead head;
+        head.set (0.0, true, 120.0);
+        ChordTextAudioProcessor p;
+        p.setPlayHead (&head);
+        p.prepareToPlay (48000.0, 512);
+
+        juce::AudioBuffer<float> audio (2, 512);
+        juce::MidiBuffer first;
+        p.processBlock (audio, first);
+        CHECK ((noteOnPitches (first) == std::vector<int> {48, 52, 55, 59}));
+
+        p.prepareToPlay (48000.0, 512);
+
+        juce::MidiBuffer afterReprepare;
+        p.processBlock (audio, afterReprepare);
+
+        CHECK ((sortedUnique (noteOffPitches (afterReprepare))
+                == std::vector<int> {48, 52, 55, 59}));
+        CHECK (noteOffsPrecedeNoteOns (afterReprepare));
+
+        for (const auto metadata : afterReprepare)
+            if (metadata.getMessage().isNoteOff())
+                CHECK (metadata.samplePosition == 0);
+    }
+
     // starting mid-chord retriggers the active chord at sample 0
     {
         FakePlayHead head;
@@ -563,6 +630,7 @@ int main()
 
         CHECK (midi.isEmpty());
         CHECK (! p.isTransportAvailable());
+        CHECK (! p.isPlayheadAvailable());
     }
 
     // export writes a readable file with tempo and paired notes
@@ -576,8 +644,10 @@ int main()
 
         const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory)
                               .getNonexistentChildFile ("chordtext-test", ".mid");
+        const auto playHeadCallsBeforeExport = head.getPositionCalls();
         juce::String error;
         CHECK (p.exportMidiFile (file, error));
+        CHECK (head.getPositionCalls() == playHeadCallsBeforeExport);
         CHECK (error.isEmpty());
 
         juce::FileInputStream in (file);
@@ -618,6 +688,53 @@ int main()
             CHECK (noteOnTicks[(size_t) i] == 0.0);
         for (int i = 4; i < 8; ++i)
             CHECK (noteOnTicks[(size_t) i] == 4.0 * 960.0);
+
+        file.deleteFile();
+    }
+
+    // export uses the last tempo observed during processing when the playhead is gone
+    {
+        FakePlayHead head;
+        head.set (0.0, true, 90.0);
+        ChordTextAudioProcessor p;
+        p.setPlayHead (&head);
+        p.setProgressionText ("Cmaj7, G7");
+        p.prepareToPlay (48000.0, 512);
+
+        juce::AudioBuffer<float> audio (2, 512);
+        juce::MidiBuffer midi;
+        p.processBlock (audio, midi);
+
+        // Export must use the cached tempo and must not query the playhead.
+        p.setPlayHead (nullptr);
+
+        const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                              .getNonexistentChildFile ("chordtext-90bpm", ".mid");
+        juce::String error;
+        CHECK (p.exportMidiFile (file, error));
+        CHECK (error.isEmpty());
+
+        double secondsPerQuarter = 0.0;
+        CHECK (readFirstTempo (file, secondsPerQuarter));
+        CHECK_NEAR (secondsPerQuarter, 60.0 / 90.0, 0.001);
+
+        file.deleteFile();
+    }
+
+    // export falls back to 120 BPM when no host tempo has ever been observed
+    {
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("Cmaj7, G7");
+
+        const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                              .getNonexistentChildFile ("chordtext-120bpm", ".mid");
+        juce::String error;
+        CHECK (p.exportMidiFile (file, error));
+        CHECK (error.isEmpty());
+
+        double secondsPerQuarter = 0.0;
+        CHECK (readFirstTempo (file, secondsPerQuarter));
+        CHECK_NEAR (secondsPerQuarter, 0.5, 0.001);
 
         file.deleteFile();
     }

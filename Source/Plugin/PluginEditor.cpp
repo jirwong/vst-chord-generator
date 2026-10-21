@@ -44,7 +44,6 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     configureLabel (rangeLabel, "Range", dimTextColour, 13.0f);
     configureLabel (velocityLabel, "Velocity", dimTextColour, 13.0f);
     configureLabel (statusLabel, {}, textColour, 13.0f);
-    configureLabel (diagnosticsLabel, {}, errorColour, 13.0f);
 
     progressionEditor.setMultiLine (true, true);
     progressionEditor.setReturnKeyStartsNewLine (true);
@@ -61,6 +60,19 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
         textEditPending = true;
         lastTextEditMs = juce::Time::getMillisecondCounterHiRes();
     };
+
+    // Read-only, scrollable area: every diagnostic is shown, not just the
+    // first two.
+    diagnosticsDisplay.setMultiLine (true, true);
+    diagnosticsDisplay.setScrollbarsShown (true);
+    diagnosticsDisplay.setReadOnly (true);
+    diagnosticsDisplay.setCaretVisible (false);
+    diagnosticsDisplay.setPopupMenuEnabled (false);
+    diagnosticsDisplay.setColour (juce::TextEditor::backgroundColourId, panelColour);
+    diagnosticsDisplay.setColour (juce::TextEditor::textColourId, errorColour);
+    diagnosticsDisplay.setColour (juce::TextEditor::outlineColourId, outlineColour);
+    diagnosticsDisplay.setColour (juce::TextEditor::focusedOutlineColourId, outlineColour);
+    diagnosticsDisplay.setFont (juce::Font (juce::FontOptions (13.0f)));
 
     auto setUpCombo = [this] (juce::ComboBox& box, const char* parameterId)
     {
@@ -99,9 +111,12 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     table.setColour (juce::TableListBox::backgroundColourId, panelColour);
     table.setColour (juce::TableListBox::outlineColourId, outlineColour);
     table.setOutlineThickness (1);
-    table.getHeader().addColumn ("Chord", 1, 176);
-    table.getHeader().addColumn ("Degree", 2, 192);
-    table.getHeader().addColumn ("Notes", 3, 348);
+    table.getHeader().addColumn ("Chord", 1, 176, 40, -1,
+                                 juce::TableHeaderComponent::notSortable);
+    table.getHeader().addColumn ("Degree", 2, 192, 40, -1,
+                                 juce::TableHeaderComponent::notSortable);
+    table.getHeader().addColumn ("Notes", 3, 348, 40, -1,
+                                 juce::TableHeaderComponent::notSortable);
     table.getHeader().setColour (juce::TableHeaderComponent::backgroundColourId,
                                  juce::Colour (0xff303034));
     table.getHeader().setColour (juce::TableHeaderComponent::textColourId, textColour);
@@ -117,7 +132,7 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     addAndMakeVisible (loopButton);
     addAndMakeVisible (exportButton);
     addAndMakeVisible (statusLabel);
-    addAndMakeVisible (diagnosticsLabel);
+    addAndMakeVisible (diagnosticsDisplay);
     addAndMakeVisible (table);
 
     keyAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "key", keyBox);
@@ -136,6 +151,11 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
 ChordTextAudioProcessorEditor::~ChordTextAudioProcessorEditor()
 {
     stopTimer();
+
+    // Do not lose a pending debounced edit when the editor closes.
+    if (textEditPending)
+        applyProgressionText();
+
     fileChooser = nullptr;
 }
 
@@ -181,10 +201,11 @@ void ChordTextAudioProcessorEditor::resized()
     statusLabel.setBounds (statusRow);
     bounds.removeFromTop (6);
 
-    diagnosticsLabel.setBounds (bounds.removeFromTop (20));
-    bounds.removeFromTop (6);
+    auto diagnosticsArea = bounds.removeFromBottom (68);
+    bounds.removeFromBottom (6);
 
     table.setBounds (bounds);
+    diagnosticsDisplay.setBounds (diagnosticsArea);
 }
 
 void ChordTextAudioProcessorEditor::timerCallback()
@@ -214,12 +235,13 @@ void ChordTextAudioProcessorEditor::applyProgressionText()
 
 void ChordTextAudioProcessorEditor::startExport()
 {
-    if (! exportButton.isEnabled())
+    if (fileChooser != nullptr || ! exportButton.isEnabled())
         return;
 
     const auto initialFile = juce::File::getSpecialLocation (juce::File::userMusicDirectory)
                                  .getChildFile ("chord-text.mid");
 
+    exportButton.setEnabled (false);
     fileChooser = std::make_unique<juce::FileChooser> ("Export MIDI file", initialFile, "*.mid");
 
     const auto chooserFlags = juce::FileBrowserComponent::saveMode
@@ -245,11 +267,10 @@ void ChordTextAudioProcessorEditor::startExport()
                 safeThis->lastExportStatus = "Exported " + file.getFileName();
             else
                 safeThis->lastExportStatus = "Export failed: " + error;
-
-            safeThis->refreshStatus();
         }
 
         safeThis->fileChooser.reset();
+        safeThis->refreshStatus();
     });
 }
 
@@ -266,24 +287,23 @@ void ChordTextAudioProcessorEditor::refreshStatus()
     const auto diagnostics = processor.getDiagnostics();
     juce::String diagnosticsText;
 
-    for (std::size_t index = 0; index < diagnostics.size() && index < 2; ++index)
+    for (std::size_t index = 0; index < diagnostics.size(); ++index)
     {
         if (index > 0)
-            diagnosticsText += "   ";
+            diagnosticsText += "\n";
 
         diagnosticsText += describeDiagnostic (diagnostics[index]);
     }
 
-    if (diagnostics.size() > 2)
-        diagnosticsText += "   ...";
-
     if (diagnosticsText != lastDiagnosticsText)
     {
         lastDiagnosticsText = diagnosticsText;
-        diagnosticsLabel.setText (diagnosticsText, juce::dontSendNotification);
+        diagnosticsDisplay.setText (diagnosticsText, juce::dontSendNotification);
     }
 
-    const auto canExport = diagnostics.empty() && ! processor.getLearningRows().empty();
+    const auto canExport = fileChooser == nullptr
+                           && diagnostics.empty()
+                           && ! processor.getLearningRows().empty();
 
     if (exportButton.isEnabled() != canExport)
         exportButton.setEnabled (canExport);
@@ -291,8 +311,14 @@ void ChordTextAudioProcessorEditor::refreshStatus()
 
 juce::String ChordTextAudioProcessorEditor::buildStatusText() const
 {
-    juce::String text = processor.isTransportAvailable() ? "Transport ready"
-                                                         : "No transport available";
+    juce::String text;
+
+    if (processor.isTransportAvailable())
+        text = "Transport ready";
+    else if (processor.isPlayheadAvailable())
+        text = "Transport stopped";
+    else
+        text = "No transport available";
 
     const auto rows = processor.getLearningRows();
 

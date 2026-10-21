@@ -306,20 +306,11 @@ bool ChordTextAudioProcessor::exportMidiFile (const juce::File& file,
         return false;
     }
 
-    auto bpm = 120.0;
-
-    if (auto* hostPlayHead = getPlayHead())
-    {
-        const auto position = hostPlayHead->getPosition();
-
-        if (position)
-        {
-            const auto hostBpm = position->getBpm();
-
-            if (hostBpm && std::isfinite (*hostBpm) && *hostBpm > 0.0)
-                bpm = *hostBpm;
-        }
-    }
+    // getPlayHead()->getPosition() is only valid during processBlock. Use the
+    // tempo cached by the audio thread, and fall back to 120 BPM until a block
+    // has supplied a usable tempo.
+    const auto cachedBpm = lastHostBpm.load (std::memory_order_relaxed);
+    const auto bpm = cachedBpm > 0.0 && std::isfinite (cachedBpm) ? cachedBpm : 120.0;
 
     constexpr double ticksPerQuarterNote = 960.0;
 
@@ -378,9 +369,50 @@ bool ChordTextAudioProcessor::exportMidiFile (const juce::File& file,
     return true;
 }
 
+void ChordTextAudioProcessor::cacheActivePitchesForRelease()
+{
+    std::uint64_t low = 0;
+    std::uint64_t high = 0;
+
+    for (auto pitch = 0; pitch < 128; ++pitch)
+    {
+        if (! activePitches[static_cast<std::size_t> (pitch)])
+            continue;
+
+        if (pitch < 64)
+            low |= std::uint64_t { 1 } << pitch;
+        else
+            high |= std::uint64_t { 1 } << (pitch - 64);
+    }
+
+    // OR so a second prepare before the next block cannot lose an earlier
+    // request.
+    pendingReleaseLow.fetch_or (low, std::memory_order_relaxed);
+    pendingReleaseHigh.fetch_or (high, std::memory_order_relaxed);
+}
+
+void ChordTextAudioProcessor::emitPendingReleases (juce::MidiBuffer& midi)
+{
+    const auto low = pendingReleaseLow.exchange (0, std::memory_order_acquire);
+    const auto high = pendingReleaseHigh.exchange (0, std::memory_order_acquire);
+
+    for (auto pitch = 0; pitch < 128; ++pitch)
+    {
+        const auto mask = std::uint64_t { 1 } << (pitch < 64 ? pitch : pitch - 64);
+        const auto pending = pitch < 64 ? (low & mask) != 0 : (high & mask) != 0;
+
+        if (! pending)
+            continue;
+
+        midi.addEvent (juce::MidiMessage::noteOff (1, pitch, static_cast<juce::uint8> (0)), 0);
+        activePitches[static_cast<std::size_t> (pitch)] = false;
+    }
+}
+
 void ChordTextAudioProcessor::prepareToPlay (double sampleRate, int)
 {
     currentSampleRate = sampleRate > 0.0 ? sampleRate : 48000.0;
+    cacheActivePitchesForRelease();
     activePitches.fill (false);
     expectedNextBeat = 0.0;
     hasExpectedBeat = false;
@@ -391,10 +423,15 @@ void ChordTextAudioProcessor::prepareToPlay (double sampleRate, int)
 
 void ChordTextAudioProcessor::releaseResources()
 {
+    // releaseResources cannot emit MIDI. Clearing the tracking is all this
+    // callback can do; the host must flush any sounding notes it owns.
     activePitches.fill (false);
+    pendingReleaseLow.store (0, std::memory_order_relaxed);
+    pendingReleaseHigh.store (0, std::memory_order_relaxed);
     hasExpectedBeat = false;
     currentStep.store (-1, std::memory_order_relaxed);
     transportAvailable.store (false, std::memory_order_relaxed);
+    playheadAvailable.store (false, std::memory_order_relaxed);
 }
 
 void ChordTextAudioProcessor::releaseActiveNotes (juce::MidiBuffer& midi, int sampleOffset)
@@ -414,6 +451,10 @@ void ChordTextAudioProcessor::releaseActiveNotes (juce::MidiBuffer& midi, int sa
 void ChordTextAudioProcessor::scheduleEvent (const chordtext::MidiEvent& event,
                                              juce::MidiBuffer& midi, int sampleOffset)
 {
+    // The host owns MidiBuffer capacity. JUCE's VST3 wrapper normally
+    // preallocates 2048 bytes, but a zero-capacity host buffer can allocate on
+    // the first addEvent. This is an accepted host-boundary residual; the
+    // plugin itself never allocates or locks on the audio thread.
     if (event.noteOn)
     {
         midi.addEvent (juce::MidiMessage::noteOn (event.channel, event.pitch,
@@ -437,6 +478,9 @@ void ChordTextAudioProcessor::processBlock (juce::AudioBuffer<float>& audio,
     juce::ScopedNoDenormals noDenormals;
     audio.clear();
     midi.clear();
+
+    // Releases requested by prepareToPlay must precede every new event.
+    emitPendingReleases (midi);
 
     if ((sharedPlanIndex.load (std::memory_order_acquire) & freshPlanBit) != 0)
     {
@@ -466,12 +510,28 @@ void ChordTextAudioProcessor::processBlock (juce::AudioBuffer<float>& audio,
     auto* hostPlayHead = getPlayHead();
     if (hostPlayHead == nullptr)
     {
+        playheadAvailable.store (false, std::memory_order_relaxed);
         disableLiveGeneration();
         return;
     }
 
     const auto position = hostPlayHead->getPosition();
-    if (! position || ! position->getIsPlaying())
+    if (! position)
+    {
+        playheadAvailable.store (false, std::memory_order_relaxed);
+        disableLiveGeneration();
+        return;
+    }
+
+    playheadAvailable.store (true, std::memory_order_relaxed);
+
+    // Cache the tempo while the playhead is legally readable. Export runs on
+    // the message thread and must not call getPosition() itself.
+    if (const auto hostBpm = position->getBpm();
+        hostBpm && std::isfinite (*hostBpm) && *hostBpm > 0.0)
+        lastHostBpm.store (*hostBpm, std::memory_order_relaxed);
+
+    if (! position->getIsPlaying())
     {
         disableLiveGeneration();
         return;
@@ -630,6 +690,7 @@ void ChordTextAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& au
     audio.clear();
     midi.clear();
 
+    emitPendingReleases (midi);
     releaseActiveNotes (midi, 0);
     expectedNextBeat = 0.0;
     hasExpectedBeat = false;
@@ -638,6 +699,11 @@ void ChordTextAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& au
 bool ChordTextAudioProcessor::isTransportAvailable() const
 {
     return transportAvailable.load (std::memory_order_relaxed);
+}
+
+bool ChordTextAudioProcessor::isPlayheadAvailable() const
+{
+    return playheadAvailable.load (std::memory_order_relaxed);
 }
 
 juce::AudioProcessorEditor* ChordTextAudioProcessor::createEditor()
@@ -691,7 +757,7 @@ void ChordTextAudioProcessor::setCurrentProgram (int)
 
 const juce::String ChordTextAudioProcessor::getProgramName (int)
 {
-    return {};
+    return "Default";
 }
 
 void ChordTextAudioProcessor::changeProgramName (int, const juce::String&)
@@ -719,10 +785,20 @@ void ChordTextAudioProcessor::setStateInformation (const void* data, int sizeInB
     if (! tree.isValid() || ! tree.hasType (apvts.state.getType()))
         return;
 
+    // The plan rebuild owns message-thread-only state. Restoring state from a
+    // host is expected on the message thread; if a host breaks that contract,
+    // marshal the rebuild through the normal async path instead of touching
+    // the plan directly.
+    const auto onMessageThread = juce::MessageManager::existsAndIsCurrentThread();
+
     cancelPendingUpdate();
     apvts.replaceState (tree);
     cancelPendingUpdate();
-    rebuildPlan();
+
+    if (onMessageThread)
+        rebuildPlan();
+    else
+        triggerAsyncUpdate();
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

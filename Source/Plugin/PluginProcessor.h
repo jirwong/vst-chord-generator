@@ -31,6 +31,10 @@ public:
     void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     bool isTransportAvailable() const;
+    // True when the last processed block had a playhead position, even if the
+    // transport was stopped. Lets the editor distinguish "stopped" from
+    // "no playhead".
+    bool isPlayheadAvailable() const;
 
     juce::AudioProcessorValueTreeState apvts;
 
@@ -73,6 +77,8 @@ private:
 
     void releaseActiveNotes (juce::MidiBuffer& midi, int sampleOffset);
     void scheduleEvent (const chordtext::MidiEvent& event, juce::MidiBuffer& midi, int sampleOffset);
+    void cacheActivePitchesForRelease();
+    void emitPendingReleases (juce::MidiBuffer& midi);
 
     static constexpr int numPlanSlots = 3;
     static constexpr std::uint32_t planIndexMask = 0x00ffffffu;
@@ -95,12 +101,24 @@ private:
 
     std::atomic<int> currentStep { -1 };
     std::atomic<bool> transportAvailable { false };
+    std::atomic<bool> playheadAvailable { false };
     std::atomic<bool> loopEnabled { true };
+
+    // Written only by the audio thread, read by the message thread for export.
+    // AudioPlayHead::getPosition() is processBlock-only, so export must never
+    // query the playhead itself.
+    std::atomic<double> lastHostBpm { 0.0 };
 
     std::array<bool, 128> activePitches {};
     double currentSampleRate = 48000.0;
     double expectedNextBeat = 0.0;
     bool hasExpectedBeat = false;
+
+    // Pitches sounding when prepareToPlay last reset the schedule. The host may
+    // call prepareToPlay off the audio thread, so these masks carry the release
+    // request to the start of the next block. Bits 0-63 and 64-127.
+    std::atomic<std::uint64_t> pendingReleaseLow { 0 };
+    std::atomic<std::uint64_t> pendingReleaseHigh { 0 };
 
     // Message thread only.
     std::vector<chordtext::Diagnostic> diagnostics;

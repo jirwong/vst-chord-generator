@@ -134,19 +134,21 @@ environment.
 5. Read the learning table for each chord's degree and spelled notes, then export a
    `.mid` file if desired.
 
-Live generation requires host playhead data with a PPQ position and tempo. If the
-host does not provide it, the status line reports `No transport available` and no
-notes are generated; the plugin does not free-run. Export still works at 120 BPM in
-that case.
+Live generation requires host playhead data with a PPQ position and tempo. The
+status line reports `Transport ready` while the transport plays, `Transport
+stopped` when a playhead position exists but the transport is not playing, and
+`No transport available` when the host supplies no usable position. In the last
+case no notes are generated; the plugin does not free-run.
 
 The progression is anchored to song position 0. Starting or seeking into the middle
 of a chord plays that chord from the start of the block, and the progression loops
 with a length equal to the sum of the chord durations. Loop is on by default; with
 loop off, the progression plays once. Stop, seek, bypass, plan changes, and loop wrap
 release active notes before new ones are emitted. When the host calls
-`prepareToPlay` again, the plugin clears its internal active-note and scheduling
-state without emitting note-offs; the host is expected to have stopped or flushed
-any sounding notes before re-preparing.
+`prepareToPlay` again, pitches that were sounding are queued for release and their
+note-offs are emitted at sample 0 of the next block before any new events.
+`releaseResources` cannot emit MIDI, so it only clears internal note tracking; the
+host is expected to flush sounding notes when it releases the plugin.
 
 ## Syntax reference
 
@@ -336,8 +338,8 @@ currently playing chord is highlighted during playback.
 ### Errors and diagnostics
 
 Every parse error identifies the failing token, a zero-based character offset into
-the progression text, and a short message. The editor shows the first two diagnostics
-in the form:
+the progression text, and a short message. The editor shows every diagnostic, one
+per line, in a scrollable area below the learning table:
 
 ```text
 Error at character 12: unknown extension "99" (Emin99)
@@ -371,23 +373,32 @@ octave doubling.
 The project state saves the progression text, key, mode, voicing, range, velocity,
 and loop setting through stable parameter IDs (`key`, `mode`, `voicing`, `range`,
 `velocity`, `loop`) plus the `progressionText` property. Restoring a project rebuilds
-the plan but does not start playback.
+the plan but does not start playback. Hosts are expected to restore state on the
+message thread; if state is restored on another thread, the plan rebuild is deferred
+to the message queue.
 
 ## MIDI export
 
 Click **Export .mid** to write one complete loop of the current progression. The
 writer uses the same render plan as live playback:
 
-- current host tempo, or 120 BPM when no tempo is available;
+- the last host tempo observed during processing, or 120 BPM before any tempo has
+  been observed;
 - 4/4 time signature;
 - track name `Chord Text`;
 - 960 ticks per quarter note;
 - deterministic event order with note-offs before note-ons at the same tick;
 - channel 1 note events.
 
-The button is disabled when the text has errors or the progression is empty. Export
-runs on the message thread and appends `.mid` if the chosen filename lacks it. The
-status line reports the file name or the failure reason.
+`AudioPlayHead::getPosition()` is only valid inside `processBlock`, so the processor
+caches the last valid host tempo in an atomic and export never queries the playhead.
+Export therefore still works with no playhead, at 120 BPM until the host has
+processed a block.
+
+The button is disabled when the text has errors or the progression is empty, and
+while a file chooser is already open. Export runs on the message thread and appends
+`.mid` if the chosen filename lacks it. The status line reports the file name or the
+failure reason.
 
 ## Tests
 
@@ -413,10 +424,10 @@ Or run the already-built executables directly:
 ./build/Tests/ProcessorTests.exe
 ```
 
-Each executable prints a summary such as `87 checks, 0 failures` and returns a
-non-zero exit code if any check fails. The build scripts stop on the first failing
-suite. The build must produce no warnings from project code under JUCE's recommended
-warning flags.
+Each executable prints a summary such as `87 checks, 0 failures` for `TheoryTests`
+and `136 checks, 0 failures` for `ProcessorTests`, and returns a non-zero exit code
+if any check fails. The build scripts stop on the first failing suite. The build must
+produce no warnings from project code under JUCE's recommended warning flags.
 
 ## Licensing
 
@@ -441,12 +452,20 @@ Known limitations in v1:
   an octave below (for example, `C/E`). There is no other octave doubling and no
   rootless voicing.
 - The Degree column is best-effort for chromatic or ambiguous roots.
-- The editor displays only the first two parse diagnostics (with `...` when there
-  are more). The processor retains the complete list, but the editor does not show
-  every diagnostic.
-- `prepareToPlay` and `releaseResources` clear internal note tracking without
-  emitting note-offs; the host is expected to flush sounding notes before
-  re-preparing or releasing the plugin.
+- `prepareToPlay` queues note-offs for pitches that were sounding and emits them at
+  sample 0 of the next block. `releaseResources` cannot emit MIDI, so it only clears
+  internal note tracking; the host is expected to flush sounding notes when it
+  releases the plugin.
+- The plugin reuses the host MIDI buffer by clearing it first. JUCE's VST3 wrapper
+  normally preallocates enough capacity, but a zero-capacity host buffer may
+  allocate on the first `MidiBuffer::addEvent`; strict no-allocation depends on the
+  host providing capacity.
+- Export uses the last tempo observed in `processBlock`. If a project is exported
+  before the host has processed a block since loading, the file uses 120 BPM.
+- Host state restore is assumed to run on the message thread. If a host calls
+  `setStateInformation` on another thread, the plugin defers the plan rebuild to
+  the message queue, but the host is still responsible for serialising state
+  changes.
 - Only one progression is active at a time; there are no saved presets beyond the
   host project state.
 
