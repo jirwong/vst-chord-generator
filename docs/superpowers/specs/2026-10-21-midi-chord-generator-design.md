@@ -181,8 +181,9 @@ i, IV, V
 C | Am7 | F | G
 ```
 
-- Chords are separated by commas, whitespace, newlines, or `|`.
-- `|` is visual only; it does not enforce a bar boundary or change timing.
+- Chords are separated by commas, whitespace, newlines, `|`, or `-`.
+- `|` and `-` are visual separators only; they do not enforce a bar boundary or
+  change timing. A hyphen is not a minor-quality alias; use `m` or `min`.
 - Default chord duration is 4 beats.
 - A suffix `:N` sets duration in beats: `Cmaj7:2`, `G7:1.5`.
 - Durations must be positive finite numbers. Zero, negative, NaN, infinity, and
@@ -516,7 +517,7 @@ Parser:
 
 - Every supported absolute quality and alias.
 - Every supported alteration and slash bass.
-- Commas, whitespace, newlines, and `|`.
+- Commas, whitespace, newlines, `|`, and `-`.
 - Durations: default, explicit, fractional, zero, negative, malformed.
 - Invalid roots, unknown qualities, `C99`, `C11`, `C13`, `C6/9`, `H`.
 - Roman numerals in major and minor keys, case-based quality, accidentals,
