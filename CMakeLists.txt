@@ -15,7 +15,9 @@ endif()
 
 add_subdirectory(libs/JUCE)
 
-set(THEORY_SOURCES)
+set(THEORY_SOURCES
+    Source/Theory/Note.cpp
+    Source/Theory/Key.cpp)
 set(PLUGIN_SOURCES Source/Plugin/PluginProcessor.cpp)
 
 juce_add_plugin(ChordText
@@ -61,3 +63,15 @@ set_target_properties(ProcessorTests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY         "${CMAKE_BINARY_DIR}/Tests"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Tests"
     RUNTIME_OUTPUT_DIRECTORY_DEBUG   "${CMAKE_BINARY_DIR}/Tests")
+
+add_executable(TheoryTests
+    Tests/TheoryTest.cpp
+    ${THEORY_SOURCES})
+target_include_directories(TheoryTests PRIVATE Source)
+target_compile_features(TheoryTests PRIVATE cxx_std_17)
+set_target_properties(TheoryTests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY                 "${CMAKE_BINARY_DIR}/Tests"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG           "${CMAKE_BINARY_DIR}/Tests"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE         "${CMAKE_BINARY_DIR}/Tests"
+    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL      "${CMAKE_BINARY_DIR}/Tests"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO  "${CMAKE_BINARY_DIR}/Tests")
