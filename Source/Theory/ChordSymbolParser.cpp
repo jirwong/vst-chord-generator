@@ -60,11 +60,13 @@ bool isAccidental (char character)
     return character == '#' || character == 'b';
 }
 
-struct QualityMatch
+ChordSymbolParseResult makeError (std::string_view token, std::size_t offset, std::string message)
 {
-    std::string_view canonical;
-    std::size_t length = 0;
-};
+    ChordSymbolParseResult result;
+    result.error = Diagnostic { std::string (token), offset, std::move (message) };
+    return result;
+}
+}
 
 QualityMatch longestQuality (std::string_view text, std::size_t position)
 {
@@ -80,14 +82,6 @@ QualityMatch longestQuality (std::string_view text, std::size_t position)
     }
 
     return best;
-}
-
-ChordSymbolParseResult makeError (std::string_view token, std::size_t offset, std::string message)
-{
-    ChordSymbolParseResult result;
-    result.error = Diagnostic { std::string (token), offset, std::move (message) };
-    return result;
-}
 }
 
 ChordSymbolParseResult parseChordSymbol (std::string_view token, std::size_t offset)

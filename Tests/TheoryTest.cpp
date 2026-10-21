@@ -3,6 +3,7 @@
 #include "Theory/ChordSymbolParser.h"
 #include "Theory/Key.h"
 #include "Theory/Note.h"
+#include "Theory/Progression.h"
 
 using namespace chordtext;
 
@@ -92,6 +93,36 @@ int main()
     CHECK (parse ("C99").error->token == "C99");
     CHECK (parse ("C99").error->offset == 7);
     CHECK (parse ("F#m7b5/C").chord->root.name() == "F#");
+
+    const Key cMajor {{'C', 0}, Mode::major};
+    const Key aMinor {{'A', 0}, Mode::minor};
+
+    auto progression = [] (std::string text, const Key& key)
+    {
+        return parseProgression (text, key);
+    };
+
+    auto symbols = [] (const Progression& p)
+    {
+        std::string result;
+        for (const auto& step : p.steps)
+            result += step.chord.symbol() + "|";
+        return result;
+    };
+
+    CHECK (symbols (*progression ("C, Cmaj7, Dmaj7, Emin9, Fmaj7", cMajor).progression)
+           == "C|Cmaj7|Dmaj7|Em9|Fmaj7|");
+    CHECK (symbols (*progression ("I-IV-V", cMajor).progression) == "C|F|G|");
+    CHECK (symbols (*progression ("i-iv-V", aMinor).progression) == "Am|Dm|E|");
+    CHECK (symbols (*progression ("bVII, #iv", cMajor).progression) == "Bb|F#m|");
+    CHECK (progression ("Cmaj7:2, G7", cMajor).progression->totalBeats() == 6.0);
+    CHECK (progression ("C | Am | F | G", cMajor).progression->steps.size() == 4);
+    CHECK (! progression ("C, H, C99", cMajor).progression.has_value());
+    CHECK (progression ("C, H, C99", cMajor).diagnostics.size() == 2);
+    CHECK (progression ("", cMajor).progression->steps.empty());
+    CHECK (progression ("", cMajor).diagnostics.empty());
+    CHECK (progression ("Cmaj7:0", cMajor).diagnostics.size() == 1);
+    CHECK (progression ("Cmaj7:nan", cMajor).diagnostics.size() == 1);
 
     return reportAndExit();
 }
