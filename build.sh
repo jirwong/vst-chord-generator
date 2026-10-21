@@ -25,5 +25,6 @@ fi
 "$cmake_cmd" --build build --config Release --parallel
 
 if [[ "${1:-}" == "--test" ]]; then
+    ./build/Tests/TheoryTests.exe
     ./build/Tests/ProcessorTests.exe
 fi

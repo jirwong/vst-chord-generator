@@ -22,6 +22,8 @@ if not exist build\CMakeCache.txt (
 if errorlevel 1 exit /b 1
 
 if /I "%~1"=="test" (
+    .\build\Tests\TheoryTests.exe
+    if errorlevel 1 exit /b 1
     .\build\Tests\ProcessorTests.exe
     if errorlevel 1 exit /b 1
     exit /b 0
