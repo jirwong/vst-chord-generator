@@ -1,5 +1,6 @@
 #include "Check.h"
 #include "Theory/Chord.h"
+#include "Theory/ChordSymbolParser.h"
 #include "Theory/Key.h"
 #include "Theory/Note.h"
 
@@ -54,6 +55,43 @@ int main()
     CHECK (degreeLabel (chord ({'A', 0}, "m7"), Key {{'C', 0}, Mode::major}) == "vi7");
     CHECK (degreeLabel (chord ({'C', 0}, "m"), Key {{'C', 0}, Mode::major}) == "i");
     CHECK (degreeLabel (chord ({'B', -1}, ""), Key {{'C', 0}, Mode::major}) == "bVII");
+
+    auto parse = [] (std::string token)
+    {
+        return parseChordSymbol (token, 7);
+    };
+
+    CHECK (parse ("Cmaj7").chord->quality == "maj7");
+    CHECK (parse ("CM7").chord->quality == "maj7");
+    CHECK (parse ("Emin9").chord->quality == "m9");
+    CHECK (parse ("Cm7b5").chord->quality == "m7b5");
+    CHECK (parse ("Cø7").chord->quality == "m7b5");
+    CHECK ((parse ("C7b9").chord->alterations == std::vector<std::pair<int,int>> {{9, -1}}));
+    CHECK (parse ("C/E").chord->slashBass->name() == "E");
+    CHECK (parse ("F#m7b5/C").chord->slashBass->name() == "C");
+    CHECK (! parse ("C99").chord.has_value());
+    CHECK (! parse ("C11").chord.has_value());
+    CHECK (! parse ("C13").chord.has_value());
+    CHECK (! parse ("C6/9").chord.has_value());
+    CHECK (! parse ("H").chord.has_value());
+    CHECK (parse ("H").error->offset == 7);
+    CHECK (parse ("C99").error->message.find ("unknown extension") != std::string::npos);
+
+    CHECK (parse ("Cmin").chord->quality == "m");
+    CHECK (parse ("Co").chord->quality == "dim");
+    CHECK (parse ("C°").chord->quality == "dim");
+    CHECK (parse ("C+").chord->quality == "aug");
+    CHECK (parse ("Cmin7").chord->quality == "m7");
+    CHECK (parse ("CminMaj7").chord->quality == "mMaj7");
+    CHECK (parse ("Co7").chord->quality == "dim7");
+    CHECK (parse ("C°7").chord->quality == "dim7");
+    CHECK (parse ("CM9").chord->quality == "maj9");
+    CHECK (parse ("Cmin6").chord->quality == "m6");
+    CHECK ((parse ("C7#9").chord->alterations == std::vector<std::pair<int,int>> {{9, 1}}));
+    CHECK (! parse ("C##").chord.has_value());
+    CHECK (parse ("C99").error->token == "C99");
+    CHECK (parse ("C99").error->offset == 7);
+    CHECK (parse ("F#m7b5/C").chord->root.name() == "F#");
 
     return reportAndExit();
 }
