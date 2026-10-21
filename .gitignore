@@ -1,0 +1,6 @@
+build/
+libs/
+.vs/
+*.vst3
+*.user
+.superpowers/
