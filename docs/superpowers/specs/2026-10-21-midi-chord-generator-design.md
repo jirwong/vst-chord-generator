@@ -353,7 +353,9 @@ Default range: C3–C6 (MIDI 48–84). The user may choose C2–C5, C3–C6, or 
 **Voice-led**
 
 - The first chord is root position.
-- Each later chord tries its inversions and octave placements within the range.
+- Each later chord tries root-position-anchored rotations plus upward octave
+  placements within the range. It does not drop below the first chord's register
+  merely to minimize movement, which keeps the progression in a stable range.
 - The chosen voicing minimizes total absolute semitone movement from the previous
   chord. Both pitch lists are sorted ascending, and the lowest `min(n, m)` notes
   are paired one-for-one; unmatched upper notes are ignored.

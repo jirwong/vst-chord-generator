@@ -757,7 +757,7 @@ RenderPlan buildRenderPlan (const Progression& progression,
 Voicing rules:
 
 - Root position: root at the lowest octave that fits; stack chord tones above it. Slash bass is the lowest note, with upper voices above it.
-- Voice-led: first chord is root position. Later candidates are inversions/octave placements within range. Sort each candidate and the previous voicing ascending; pair the lowest `min(n, m)` notes; minimize the sum of absolute semitone distances. Ties prefer the smaller maximum leap, then the lower average pitch.
+- Voice-led: first chord is root position. Later candidates are root-position-anchored rotations plus upward octave placements within range; do not drop below the first chord's register merely to minimize movement. Sort each candidate and the previous voicing ascending; pair the lowest `min(n, m)` notes; minimize the sum of absolute semitone distances. Ties prefer the smaller maximum leap, then the lower average pitch.
 - Every pitch must be in `[0, 127]` and within the requested range after octave adjustment.
 - Build events with note-on at `step` start and note-off at `step + duration`. Sort by beat, then note-off before note-on, then pitch. `lengthBeats` is the progression total.
 
