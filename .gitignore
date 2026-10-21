@@ -4,3 +4,4 @@ libs/
 *.vst3
 *.user
 .superpowers/
+.worktrees/
