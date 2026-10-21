@@ -466,7 +466,7 @@ CHECK (names (chord ({'G', 1}, "maj7")) == "G#B#D#F##");
 CHECK (names (chord ({'C', 0}, "7sus4")) == "CFGBb");
 CHECK (names (chord ({'C', 0}, "9sus4")) == "CFGBbD");
 CHECK (names (chord ({'C', 0}, "7", {{9, -1}})) == "CEGBbDb");
-CHECK (names (chord ({'C', 1}, "")) == "CE#G#");
+CHECK (names (chord ({'C', 1}, "")) == "C#E#G#");
 CHECK (chord ({'C', 1}, "").symbol() == "C#");
 CHECK (chord ({'C', 0}, "7", {{9, -1}}).symbol() == "C7b9");
 CHECK (chord ({'C', 0}, "", {}, PitchClass {'E', 0}).symbol() == "C/E");
