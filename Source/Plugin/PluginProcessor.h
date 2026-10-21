@@ -1,17 +1,29 @@
 #pragma once
 
+#include "Theory/Diagnostic.h"
 #include "Theory/RenderPlan.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include <array>
 #include <atomic>
+#include <cstdint>
+#include <vector>
 
-class ChordTextAudioProcessor final : public juce::AudioProcessor
+struct LearningRow
+{
+    juce::String chord;
+    juce::String degree;
+    juce::String notes;
+};
+
+class ChordTextAudioProcessor final : public juce::AudioProcessor,
+                                      public juce::AudioProcessorValueTreeState::Listener,
+                                      private juce::AsyncUpdater
 {
 public:
     ChordTextAudioProcessor();
-    ~ChordTextAudioProcessor() override = default;
+    ~ChordTextAudioProcessor() override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
@@ -19,6 +31,15 @@ public:
     void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     bool isTransportAvailable() const;
+
+    juce::AudioProcessorValueTreeState apvts;
+
+    void setProgressionText (juce::String text);
+    juce::String getProgressionText() const;
+    std::vector<chordtext::Diagnostic> getDiagnostics() const;
+    std::vector<LearningRow> getLearningRows() const;
+    int getCurrentStep() const;
+    void rebuildPlan(); // message thread only
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override;
@@ -36,24 +57,49 @@ public:
     void setStateInformation (const void*, int) override;
 
 private:
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
+    void parameterChanged (const juce::String& parameterID, float newValue) override;
+    void handleAsyncUpdate() override;
+
     // Message thread only. Never call from processBlock.
     void publishPlan (chordtext::RenderPlan plan);
+
+    chordtext::Key selectedKey() const;
+    int parameterIndex (const juce::String& parameterID) const;
 
     void releaseActiveNotes (juce::MidiBuffer& midi, int sampleOffset);
     void scheduleEvent (const chordtext::MidiEvent& event, juce::MidiBuffer& midi, int sampleOffset);
 
     static constexpr int numPlanSlots = 3;
+    static constexpr std::uint32_t planIndexMask = 0x00ffffffu;
+    static constexpr std::uint32_t freshPlanBit = 0x01000000u;
 
-    std::array<chordtext::RenderPlan, numPlanSlots> planSlots;
-    std::atomic<int> publishedPlan { 0 };
-    std::atomic<int> observedPlan { 0 };
+    struct PlanSlot
+    {
+        chordtext::RenderPlan plan;
+        std::uint64_t generation = 0;
+    };
+
+    // Triple buffer: the message thread owns writePlanIndex, the audio thread
+    // owns readPlanIndex, and sharedPlanIndex holds the slot in between.
+    std::array<PlanSlot, numPlanSlots> planSlots;
+    std::atomic<std::uint32_t> sharedPlanIndex { 2 };
+    int readPlanIndex = 0;
+    int writePlanIndex = 1;
+    std::uint64_t nextPlanGeneration = 0;
+    std::uint64_t lastObservedGeneration = 0;
+
     std::atomic<int> currentStep { -1 };
     std::atomic<bool> transportAvailable { false };
+    std::atomic<bool> loopEnabled { true };
 
     std::array<bool, 128> activePitches {};
     double currentSampleRate = 48000.0;
     double expectedNextBeat = 0.0;
     bool hasExpectedBeat = false;
-    int lastObservedPlan = -1;
-    bool loopEnabled = true;
+
+    // Message thread only.
+    std::vector<chordtext::Diagnostic> diagnostics;
+    std::vector<LearningRow> learningRows;
 };

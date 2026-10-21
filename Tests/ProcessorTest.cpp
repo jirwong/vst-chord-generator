@@ -3,6 +3,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
+#include <algorithm>
 #include <vector>
 
 class FakePlayHead : public juce::AudioPlayHead
@@ -48,6 +49,54 @@ static int countNoteOffs (const juce::MidiBuffer& midi)
     return result;
 }
 
+static std::vector<int> noteOffPitches (const juce::MidiBuffer& midi)
+{
+    std::vector<int> result;
+    for (const auto metadata : midi)
+        if (metadata.getMessage().isNoteOff())
+            result.push_back (metadata.getMessage().getNoteNumber());
+    return result;
+}
+
+static std::vector<int> sortedUnique (std::vector<int> values)
+{
+    std::sort (values.begin(), values.end());
+    values.erase (std::unique (values.begin(), values.end()), values.end());
+    return values;
+}
+
+static bool noteOffsPrecedeNoteOns (const juce::MidiBuffer& midi)
+{
+    auto seenNoteOn = false;
+
+    for (const auto metadata : midi)
+    {
+        const auto message = metadata.getMessage();
+
+        if (message.isNoteOn())
+            seenNoteOn = true;
+        else if (message.isNoteOff() && seenNoteOn)
+            return false;
+    }
+
+    return true;
+}
+
+static bool allEventsAtSample (const juce::MidiBuffer& midi, int sample)
+{
+    for (const auto metadata : midi)
+        if (metadata.samplePosition != sample)
+            return false;
+
+    return true;
+}
+
+static int choiceIndex (ChordTextAudioProcessor& p, const char* id)
+{
+    auto* parameter = dynamic_cast<juce::AudioParameterChoice*> (p.apvts.getParameter (id));
+    return parameter != nullptr ? parameter->getIndex() : -1;
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
@@ -73,6 +122,17 @@ int main()
         CHECK (pitches.size() == 4);
         CHECK (pitchSum == 48 + 52 + 55 + 59);
         CHECK (midi.getFirstEventTime() == 0);
+
+        for (const auto metadata : midi)
+        {
+            const auto message = metadata.getMessage();
+
+            if (message.isNoteOn())
+            {
+                CHECK (message.getChannel() == 1);
+                CHECK (message.getVelocity() == 100);
+            }
+        }
     }
 
     // first chord at transport start
@@ -108,6 +168,7 @@ int main()
         p.processBlock (audio, stopped);
         CHECK (countNoteOffs (stopped) == 4);
         CHECK (noteOnPitches (stopped).empty());
+        CHECK ((sortedUnique (noteOffPitches (stopped)) == std::vector<int> {48, 52, 55, 59}));
     }
 
     // bypass releases active notes
@@ -125,6 +186,7 @@ int main()
         juce::MidiBuffer bypassed;
         p.processBlockBypassed (audio, bypassed);
         CHECK (countNoteOffs (bypassed) == 4);
+        CHECK (noteOnPitches (bypassed).empty());
     }
 
     // seek releases old notes and retriggers the active chord
@@ -181,6 +243,325 @@ int main()
         CHECK (lastOffIndex >= 0);
         CHECK (firstOnIndex >= 0);
         CHECK (lastOffIndex < firstOnIndex);
+    }
+
+    // parameter layout defaults and default learning rows
+    {
+        ChordTextAudioProcessor p;
+
+        CHECK (p.apvts.getParameter ("key") != nullptr);
+        CHECK (p.apvts.getParameter ("mode") != nullptr);
+        CHECK (p.apvts.getParameter ("voicing") != nullptr);
+        CHECK (p.apvts.getParameter ("range") != nullptr);
+        CHECK (p.apvts.getParameter ("velocity") != nullptr);
+        CHECK (p.apvts.getParameter ("loop") != nullptr);
+
+        CHECK (choiceIndex (p, "key") == 0);
+        CHECK (choiceIndex (p, "mode") == 0);
+        CHECK (choiceIndex (p, "voicing") == 0);
+        CHECK (choiceIndex (p, "range") == 1);
+
+        auto* key = dynamic_cast<juce::AudioParameterChoice*> (p.apvts.getParameter ("key"));
+        auto* mode = dynamic_cast<juce::AudioParameterChoice*> (p.apvts.getParameter ("mode"));
+        auto* voicing = dynamic_cast<juce::AudioParameterChoice*> (p.apvts.getParameter ("voicing"));
+        auto* range = dynamic_cast<juce::AudioParameterChoice*> (p.apvts.getParameter ("range"));
+        auto* velocity = dynamic_cast<juce::AudioParameterInt*> (p.apvts.getParameter ("velocity"));
+        auto* loop = dynamic_cast<juce::AudioParameterBool*> (p.apvts.getParameter ("loop"));
+
+        CHECK (key != nullptr && key->getCurrentChoiceName() == "C");
+        CHECK (mode != nullptr && mode->getCurrentChoiceName() == "Major");
+        CHECK (voicing != nullptr && voicing->getCurrentChoiceName() == "Voice-led");
+        CHECK (range != nullptr && range->getCurrentChoiceName() == "C3-C6");
+        CHECK (velocity != nullptr && velocity->get() == 100);
+        CHECK (loop != nullptr && loop->get());
+
+        const auto rows = p.getLearningRows();
+        CHECK (rows.size() == 4);
+        CHECK (rows.size() == 4 && rows[0].chord == "Cmaj7");
+        CHECK (rows.size() == 4 && rows[0].degree == "Imaj7");
+        CHECK (rows.size() == 4 && rows[0].notes == "C E G B");
+        CHECK (p.getProgressionText() == "Cmaj7, Am7, Dm7, G7");
+    }
+
+    // key change updates the parsed rows and generated pitches
+    {
+        FakePlayHead head;
+        head.set (0.0, true, 120.0);
+        ChordTextAudioProcessor p;
+        p.setPlayHead (&head);
+        p.setProgressionText ("i, V");
+        p.apvts.getParameter ("key")->setValueNotifyingHost (13.0f / 16.0f); // A
+        p.apvts.getParameter ("mode")->setValueNotifyingHost (1.0f);        // Minor
+        p.rebuildPlan();
+        p.prepareToPlay (48000.0, 512);
+
+        CHECK (p.getLearningRows().size() == 2);
+        CHECK (p.getLearningRows()[0].chord == "Am");
+        CHECK (p.getLearningRows()[1].chord == "E");
+
+        juce::AudioBuffer<float> audio (2, 512);
+        juce::MidiBuffer midi;
+        p.processBlock (audio, midi);
+        CHECK ((noteOnPitches (midi) == std::vector<int> {57, 60, 64}));
+    }
+
+    // invalid text keeps the last valid plan and reports diagnostics
+    {
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("C");
+        CHECK (p.getLearningRows().size() == 1);
+        p.setProgressionText ("H");
+        CHECK (p.getLearningRows().size() == 1);
+        CHECK (! p.getDiagnostics().empty());
+        CHECK (p.getDiagnostics().front().token == "H");
+
+        FakePlayHead head;
+        head.set (0.0, true, 120.0);
+        p.setPlayHead (&head);
+        p.prepareToPlay (48000.0, 512);
+
+        juce::AudioBuffer<float> audio (2, 512);
+        juce::MidiBuffer midi;
+        p.processBlock (audio, midi);
+        CHECK ((noteOnPitches (midi) == std::vector<int> {48, 52, 55}));
+    }
+
+    // state round-trip restores text, key, and the rebuilt rows
+    {
+        ChordTextAudioProcessor a;
+        a.setProgressionText ("i, V");
+        a.apvts.getParameter ("key")->setValueNotifyingHost (13.0f / 16.0f); // A
+        a.apvts.getParameter ("mode")->setValueNotifyingHost (1.0f);        // Minor
+        a.rebuildPlan();
+
+        juce::MemoryBlock state;
+        a.getStateInformation (state);
+
+        ChordTextAudioProcessor b;
+        b.setStateInformation (state.getData(), (int) state.getSize());
+        CHECK (b.getProgressionText() == "i, V");
+        CHECK (b.getLearningRows().size() == 2);
+        CHECK (b.getLearningRows()[0].chord == "Am");
+        CHECK (choiceIndex (b, "key") == 13);
+        CHECK (choiceIndex (b, "mode") == 1);
+    }
+
+    // state round-trip restores voicing, range, velocity, and loop
+    {
+        ChordTextAudioProcessor a;
+        a.setProgressionText ("Cmaj7, Dm7");
+        a.apvts.getParameter ("voicing")->setValueNotifyingHost (1.0f); // Root position
+        a.apvts.getParameter ("range")->setValueNotifyingHost (0.0f);   // C2-C5
+        a.apvts.getParameter ("velocity")->setValueNotifyingHost (0.5f); // 64
+        a.apvts.getParameter ("loop")->setValueNotifyingHost (0.0f);    // Off
+
+        juce::MemoryBlock state;
+        a.getStateInformation (state);
+
+        ChordTextAudioProcessor b;
+        b.setStateInformation (state.getData(), (int) state.getSize());
+
+        CHECK (choiceIndex (b, "voicing") == 1);
+        CHECK (choiceIndex (b, "range") == 0);
+        auto* velocity = dynamic_cast<juce::AudioParameterInt*> (b.apvts.getParameter ("velocity"));
+        auto* loop = dynamic_cast<juce::AudioParameterBool*> (b.apvts.getParameter ("loop"));
+        CHECK (velocity != nullptr && velocity->get() == 64);
+        CHECK (loop != nullptr && ! loop->get());
+    }
+
+    // voicing mode changes the generated pitch set
+    {
+        FakePlayHead head;
+        head.set (8.0, true, 120.0);
+
+        ChordTextAudioProcessor voiceLed;
+        voiceLed.setPlayHead (&head);
+        voiceLed.setProgressionText ("Cmaj7, Am7, Dm7");
+        voiceLed.prepareToPlay (48000.0, 512);
+        juce::AudioBuffer<float> audio (2, 512);
+        juce::MidiBuffer voiceLedMidi;
+        voiceLed.processBlock (audio, voiceLedMidi);
+        CHECK ((noteOnPitches (voiceLedMidi) == std::vector<int> {57, 60, 62, 65}));
+
+        ChordTextAudioProcessor rootPosition;
+        rootPosition.setPlayHead (&head);
+        rootPosition.setProgressionText ("Cmaj7, Am7, Dm7");
+        rootPosition.apvts.getParameter ("voicing")->setValueNotifyingHost (1.0f);
+        rootPosition.rebuildPlan();
+        rootPosition.prepareToPlay (48000.0, 512);
+        juce::MidiBuffer rootMidi;
+        rootPosition.processBlock (audio, rootMidi);
+        CHECK ((noteOnPitches (rootMidi) == std::vector<int> {50, 53, 57, 60}));
+    }
+
+    // range changes the generated pitch set
+    {
+        FakePlayHead head;
+        head.set (0.0, true, 120.0);
+        juce::AudioBuffer<float> audio (2, 512);
+
+        ChordTextAudioProcessor low;
+        low.setPlayHead (&head);
+        low.setProgressionText ("Cmaj7");
+        low.apvts.getParameter ("range")->setValueNotifyingHost (0.0f); // C2-C5
+        low.rebuildPlan();
+        low.prepareToPlay (48000.0, 512);
+        juce::MidiBuffer lowMidi;
+        low.processBlock (audio, lowMidi);
+        CHECK ((noteOnPitches (lowMidi) == std::vector<int> {36, 40, 43, 47}));
+
+        ChordTextAudioProcessor high;
+        high.setPlayHead (&head);
+        high.setProgressionText ("Cmaj7");
+        high.apvts.getParameter ("range")->setValueNotifyingHost (1.0f); // C4-C7
+        high.rebuildPlan();
+        high.prepareToPlay (48000.0, 512);
+        juce::MidiBuffer highMidi;
+        high.processBlock (audio, highMidi);
+        CHECK ((noteOnPitches (highMidi) == std::vector<int> {60, 64, 67, 71}));
+    }
+
+    // swapping the plan while playing releases old notes before the new chord
+    {
+        FakePlayHead head;
+        head.set (0.0, true, 120.0);
+        ChordTextAudioProcessor p;
+        p.setPlayHead (&head);
+        p.setProgressionText ("Cmaj7");
+        p.prepareToPlay (48000.0, 512);
+
+        const auto blockBeats = 512.0 * 120.0 / (60.0 * 48000.0);
+        juce::AudioBuffer<float> audio (2, 512);
+        juce::MidiBuffer first;
+        p.processBlock (audio, first);
+        CHECK ((noteOnPitches (first) == std::vector<int> {48, 52, 55, 59}));
+
+        head.set (blockBeats, true, 120.0);
+        p.setProgressionText ("Am7");
+        p.setProgressionText ("Dm7");
+        p.setProgressionText ("G7");
+        juce::MidiBuffer swapped;
+        p.processBlock (audio, swapped);
+
+        CHECK ((sortedUnique (noteOffPitches (swapped)) == std::vector<int> {48, 52, 55, 59}));
+        CHECK ((noteOnPitches (swapped) == std::vector<int> {55, 59, 62, 65}));
+        CHECK (noteOffsPrecedeNoteOns (swapped));
+    }
+
+    // loop wrap releases the old chord before restarting the progression
+    {
+        FakePlayHead head;
+        head.set (0.0, true, 120.0);
+        ChordTextAudioProcessor p;
+        p.setPlayHead (&head);
+        p.setProgressionText ("C:0.5, G:0.5");
+        p.prepareToPlay (48000.0, 512);
+
+        const auto blockBeats = 512.0 * 120.0 / (60.0 * 48000.0);
+        juce::AudioBuffer<float> audio (2, 512);
+
+        // Advance without a seek until the block that crosses beat 1.0.
+        for (int i = 0; i < 46; ++i)
+        {
+            head.set (i * blockBeats, true, 120.0);
+            juce::MidiBuffer discarded;
+            p.processBlock (audio, discarded);
+        }
+
+        head.set (46 * blockBeats, true, 120.0);
+        juce::MidiBuffer wrapped;
+        p.processBlock (audio, wrapped);
+
+        CHECK ((sortedUnique (noteOffPitches (wrapped)) == std::vector<int> {55, 59, 62}));
+        CHECK ((noteOnPitches (wrapped) == std::vector<int> {48, 52, 55}));
+        CHECK (noteOffsPrecedeNoteOns (wrapped));
+
+        head.set (47 * blockBeats, false, 120.0);
+        juce::MidiBuffer stopped;
+        p.processBlock (audio, stopped);
+        CHECK (countNoteOffs (stopped) == 3);
+        CHECK (noteOnPitches (stopped).empty());
+        CHECK ((sortedUnique (noteOffPitches (stopped)) == std::vector<int> {48, 52, 55}));
+    }
+
+    // loop off stops generating after the progression end
+    {
+        FakePlayHead head;
+        head.set (0.0, true, 120.0);
+        ChordTextAudioProcessor p;
+        p.setPlayHead (&head);
+        p.apvts.getParameter ("loop")->setValueNotifyingHost (0.0f);
+        p.prepareToPlay (48000.0, 512);
+
+        const auto blockBeats = 512.0 * 120.0 / (60.0 * 48000.0);
+        juce::AudioBuffer<float> audio (2, 512);
+        auto lateNoteOns = false;
+        auto endNoteOffs = 0;
+
+        for (int i = 0; i <= 760; ++i)
+        {
+            head.set (i * blockBeats, true, 120.0);
+            juce::MidiBuffer midi;
+            p.processBlock (audio, midi);
+
+            if (i >= 749 && i <= 751)
+                endNoteOffs += countNoteOffs (midi);
+
+            if (i >= 750 && ! noteOnPitches (midi).empty())
+                lateNoteOns = true;
+        }
+
+        CHECK (! lateNoteOns);
+        CHECK (endNoteOffs == 4);
+        CHECK (p.getCurrentStep() == -1);
+    }
+
+    // releaseResources marks the transport unavailable
+    {
+        FakePlayHead head;
+        head.set (0.0, true, 120.0);
+        ChordTextAudioProcessor p;
+        p.setPlayHead (&head);
+        p.prepareToPlay (48000.0, 512);
+
+        juce::AudioBuffer<float> audio (2, 512);
+        juce::MidiBuffer midi;
+        p.processBlock (audio, midi);
+        CHECK (p.isTransportAvailable());
+
+        p.releaseResources();
+        CHECK (! p.isTransportAvailable());
+    }
+
+    // starting mid-chord retriggers the active chord at sample 0
+    {
+        FakePlayHead head;
+        head.set (9.5, true, 120.0);
+        ChordTextAudioProcessor p;
+        p.setPlayHead (&head);
+        p.prepareToPlay (48000.0, 512);
+
+        juce::AudioBuffer<float> audio (2, 512);
+        juce::MidiBuffer midi;
+        p.processBlock (audio, midi);
+
+        CHECK ((noteOnPitches (midi) == std::vector<int> {57, 60, 62, 65}));
+        CHECK (noteOffPitches (midi).empty());
+        CHECK (allEventsAtSample (midi, 0));
+        CHECK (p.getCurrentStep() == 2);
+    }
+
+    // missing playhead produces no notes and reports no transport
+    {
+        ChordTextAudioProcessor p;
+        p.prepareToPlay (48000.0, 512);
+
+        juce::AudioBuffer<float> audio (2, 512);
+        juce::MidiBuffer midi;
+        p.processBlock (audio, midi);
+
+        CHECK (midi.isEmpty());
+        CHECK (! p.isTransportAvailable());
     }
 
     return reportAndExit();

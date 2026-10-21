@@ -5,14 +5,26 @@
 #include "Theory/Voicer.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <memory>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace
 {
 constexpr double seekToleranceBeats = 0.25;
 constexpr double beatEpsilon = 1.0e-9;
+
+constexpr std::array<const char*, 17> keyNames {
+    "C", "C#", "Db", "D", "D#", "Eb", "E", "F", "F#", "Gb",
+    "G", "G#", "Ab", "A", "A#", "Bb", "B"
+};
+
+constexpr std::array<int, 3> rangeLowMidi { 36, 48, 60 };
+constexpr std::array<int, 3> rangeHighMidi { 72, 84, 96 };
 
 double positiveFmod (double value, double modulus)
 {
@@ -60,34 +72,218 @@ bool findActiveStep (const chordtext::RenderPlan& plan, double phase,
 
     return ! foundEnd || phase < stepEndBeat;
 }
+
+chordtext::PitchClass pitchClassFromName (const char* name)
+{
+    const auto* text = name;
+    auto alteration = 0;
+
+    if (text[1] == '#')
+        alteration = 1;
+    else if (text[1] == 'b')
+        alteration = -1;
+
+    return { text[0], alteration };
+}
+
+std::string noteNameForPitch (const chordtext::Chord& chord, int midi)
+{
+    const auto pitchClass = ((midi % 12) + 12) % 12;
+
+    for (const auto& tone : chord.tones())
+    {
+        if (((tone.semitone() % 12) + 12) % 12 == pitchClass)
+            return tone.name();
+    }
+
+    return juce::MidiMessage::getMidiNoteName (midi, true, false, 3).toStdString();
+}
+
+std::string notesForVoicing (const chordtext::Chord& chord, const std::vector<int>& voicing)
+{
+    std::string result;
+
+    for (const auto pitch : voicing)
+    {
+        if (! result.empty())
+            result += ' ';
+
+        result += noteNameForPitch (chord, pitch);
+    }
+
+    return result;
+}
 } // namespace
 
 ChordTextAudioProcessor::ChordTextAudioProcessor()
-    : juce::AudioProcessor (BusesProperties{})
+    : juce::AudioProcessor (BusesProperties{}),
+      apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
 {
-    const chordtext::Key key { chordtext::PitchClass { 'C', 0 }, chordtext::Mode::major };
-    const auto parsed = chordtext::parseProgression ("Cmaj7, Am7, Dm7, G7", key);
+    apvts.addParameterListener ("key", this);
+    apvts.addParameterListener ("mode", this);
+    apvts.addParameterListener ("voicing", this);
+    apvts.addParameterListener ("range", this);
+    apvts.addParameterListener ("velocity", this);
+    apvts.addParameterListener ("loop", this);
+
+    setProgressionText ("Cmaj7, Am7, Dm7, G7");
+}
+
+ChordTextAudioProcessor::~ChordTextAudioProcessor()
+{
+    cancelPendingUpdate();
+
+    apvts.removeParameterListener ("key", this);
+    apvts.removeParameterListener ("mode", this);
+    apvts.removeParameterListener ("voicing", this);
+    apvts.removeParameterListener ("range", this);
+    apvts.removeParameterListener ("velocity", this);
+    apvts.removeParameterListener ("loop", this);
+}
+
+juce::AudioProcessorValueTreeState::ParameterLayout
+ChordTextAudioProcessor::createParameterLayout()
+{
+    juce::AudioProcessorValueTreeState::ParameterLayout layout;
+
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { "key", 1 }, "Key",
+        juce::StringArray { "C", "C#", "Db", "D", "D#", "Eb", "E", "F", "F#", "Gb",
+                            "G", "G#", "Ab", "A", "A#", "Bb", "B" },
+        0));
+
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { "mode", 1 }, "Mode",
+        juce::StringArray { "Major", "Minor" }, 0));
+
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { "voicing", 1 }, "Voicing",
+        juce::StringArray { "Voice-led", "Root position" }, 0));
+
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { "range", 1 }, "Range",
+        juce::StringArray { "C2-C5", "C3-C6", "C4-C7" }, 1));
+
+    layout.add (std::make_unique<juce::AudioParameterInt> (
+        juce::ParameterID { "velocity", 1 }, "Velocity", 1, 127, 100));
+
+    layout.add (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { "loop", 1 }, "Loop", true));
+
+    return layout;
+}
+
+void ChordTextAudioProcessor::parameterChanged (const juce::String& parameterID, float newValue)
+{
+    if (parameterID == "loop")
+    {
+        loopEnabled.store (newValue >= 0.5f, std::memory_order_relaxed);
+        return;
+    }
+
+    triggerAsyncUpdate();
+}
+
+void ChordTextAudioProcessor::handleAsyncUpdate()
+{
+    rebuildPlan();
+}
+
+int ChordTextAudioProcessor::parameterIndex (const juce::String& parameterID) const
+{
+    if (const auto* value = apvts.getRawParameterValue (parameterID))
+        return static_cast<int> (std::lround (value->load (std::memory_order_relaxed)));
+
+    return 0;
+}
+
+chordtext::Key ChordTextAudioProcessor::selectedKey() const
+{
+    const auto keyIndex = std::clamp (parameterIndex ("key"), 0, 16);
+    const auto mode = parameterIndex ("mode") == 1 ? chordtext::Mode::minor
+                                                    : chordtext::Mode::major;
+
+    return { pitchClassFromName (keyNames[static_cast<std::size_t> (keyIndex)]), mode };
+}
+
+void ChordTextAudioProcessor::setProgressionText (juce::String text)
+{
+    apvts.state.setProperty ("progressionText", text, nullptr);
+    rebuildPlan();
+}
+
+juce::String ChordTextAudioProcessor::getProgressionText() const
+{
+    return apvts.state.getProperty ("progressionText").toString();
+}
+
+std::vector<chordtext::Diagnostic> ChordTextAudioProcessor::getDiagnostics() const
+{
+    return diagnostics;
+}
+
+std::vector<LearningRow> ChordTextAudioProcessor::getLearningRows() const
+{
+    return learningRows;
+}
+
+int ChordTextAudioProcessor::getCurrentStep() const
+{
+    return currentStep.load (std::memory_order_relaxed);
+}
+
+void ChordTextAudioProcessor::rebuildPlan()
+{
+    const auto key = selectedKey();
+    const auto parsed = chordtext::parseProgression (getProgressionText().toStdString(), key);
+
+    diagnostics = parsed.diagnostics;
 
     if (! parsed.progression.has_value())
         return;
 
-    const chordtext::VoicingSettings settings {};
-    publishPlan (chordtext::buildRenderPlan (*parsed.progression,
-                                             chordtext::voiceProgression (*parsed.progression, settings),
-                                             100));
+    const auto voicingIndex = parameterIndex ("voicing");
+    const auto rangeIndex = std::clamp (parameterIndex ("range"), 0, 2);
+
+    chordtext::VoicingSettings settings;
+    settings.mode = voicingIndex == 1 ? chordtext::VoicingMode::rootPosition
+                                      : chordtext::VoicingMode::voiceLed;
+    settings.lowMidi = rangeLowMidi[static_cast<std::size_t> (rangeIndex)];
+    settings.highMidi = rangeHighMidi[static_cast<std::size_t> (rangeIndex)];
+
+    const auto& progression = *parsed.progression;
+    const auto voicings = chordtext::voiceProgression (progression, settings);
+    const auto velocity = std::clamp (parameterIndex ("velocity"), 1, 127);
+
+    publishPlan (chordtext::buildRenderPlan (progression, voicings, velocity));
+
+    learningRows.clear();
+    learningRows.reserve (progression.steps.size());
+
+    for (std::size_t index = 0; index < progression.steps.size(); ++index)
+    {
+        const auto& step = progression.steps[index];
+        LearningRow row;
+        row.chord = step.chord.symbol();
+        row.degree = chordtext::degreeLabel (step.chord, key);
+        row.notes = notesForVoicing (step.chord, voicings[index]);
+        learningRows.push_back (std::move (row));
+    }
 }
 
 void ChordTextAudioProcessor::publishPlan (chordtext::RenderPlan plan)
 {
-    const auto published = publishedPlan.load (std::memory_order_acquire);
-    const auto observed = observedPlan.load (std::memory_order_acquire);
+    ++nextPlanGeneration;
 
-    auto slot = 0;
-    while (slot == published || slot == observed)
-        ++slot;
+    auto& slot = planSlots[static_cast<std::size_t> (writePlanIndex)];
+    slot.plan = std::move (plan);
+    slot.generation = nextPlanGeneration;
 
-    planSlots[static_cast<std::size_t> (slot)] = std::move (plan);
-    publishedPlan.store (slot, std::memory_order_release);
+    const auto previous = sharedPlanIndex.exchange (
+        static_cast<std::uint32_t> (writePlanIndex) | freshPlanBit,
+        std::memory_order_acq_rel);
+
+    writePlanIndex = static_cast<int> (previous & planIndexMask);
 }
 
 void ChordTextAudioProcessor::prepareToPlay (double sampleRate, int)
@@ -96,7 +292,7 @@ void ChordTextAudioProcessor::prepareToPlay (double sampleRate, int)
     activePitches.fill (false);
     expectedNextBeat = 0.0;
     hasExpectedBeat = false;
-    lastObservedPlan = -1;
+    lastObservedGeneration = 0;
     currentStep.store (-1, std::memory_order_relaxed);
     transportAvailable.store (false, std::memory_order_relaxed);
 }
@@ -106,6 +302,7 @@ void ChordTextAudioProcessor::releaseResources()
     activePitches.fill (false);
     hasExpectedBeat = false;
     currentStep.store (-1, std::memory_order_relaxed);
+    transportAvailable.store (false, std::memory_order_relaxed);
 }
 
 void ChordTextAudioProcessor::releaseActiveNotes (juce::MidiBuffer& midi, int sampleOffset)
@@ -149,13 +346,19 @@ void ChordTextAudioProcessor::processBlock (juce::AudioBuffer<float>& audio,
     audio.clear();
     midi.clear();
 
-    const auto planIndex = publishedPlan.load (std::memory_order_acquire);
-    observedPlan.store (planIndex, std::memory_order_release);
-    const auto& plan = planSlots[static_cast<std::size_t> (planIndex)];
-
-    if (lastObservedPlan != planIndex)
+    if ((sharedPlanIndex.load (std::memory_order_acquire) & freshPlanBit) != 0)
     {
-        lastObservedPlan = planIndex;
+        const auto previous = sharedPlanIndex.exchange (
+            static_cast<std::uint32_t> (readPlanIndex), std::memory_order_acq_rel);
+        readPlanIndex = static_cast<int> (previous & planIndexMask);
+    }
+
+    const auto& slot = planSlots[static_cast<std::size_t> (readPlanIndex)];
+    const auto& plan = slot.plan;
+
+    if (lastObservedGeneration != slot.generation)
+    {
+        lastObservedGeneration = slot.generation;
         releaseActiveNotes (midi, 0);
         hasExpectedBeat = false;
     }
@@ -199,6 +402,7 @@ void ChordTextAudioProcessor::processBlock (juce::AudioBuffer<float>& audio,
     const auto blockStartBeat = *ppqPosition;
     const auto blockBeats = static_cast<double> (numSamples) * *bpm / (60.0 * currentSampleRate);
     const auto loopLengthBeats = plan.lengthBeats;
+    const auto loopEnabledNow = loopEnabled.load (std::memory_order_relaxed);
 
     if (loopLengthBeats <= 0.0)
     {
@@ -219,12 +423,12 @@ void ChordTextAudioProcessor::processBlock (juce::AudioBuffer<float>& audio,
         currentStep.store (-1, std::memory_order_relaxed);
     }
 
-    const auto phaseStart = loopEnabled
+    const auto phaseStart = loopEnabledNow
                                 ? positiveFmod (blockStartBeat, loopLengthBeats)
                                 : blockStartBeat;
 
     // Loop off: the progression plays once from song position 0.
-    if (! loopEnabled && phaseStart >= loopLengthBeats)
+    if (! loopEnabledNow && phaseStart >= loopLengthBeats)
     {
         releaseActiveNotes (midi, 0);
         expectedNextBeat = blockStartBeat + blockBeats;
@@ -277,7 +481,7 @@ void ChordTextAudioProcessor::processBlock (juce::AudioBuffer<float>& audio,
     auto phase = phaseStart;
     auto relativeStart = 0.0;
 
-    if (! loopEnabled)
+    if (! loopEnabledNow)
     {
         const auto phaseEnd = std::min (loopLengthBeats, phaseStart + blockBeats);
         scheduleSegment (phaseStart, phaseEnd, 0.0);
@@ -402,12 +606,31 @@ void ChordTextAudioProcessor::changeProgramName (int, const juce::String&)
 {
 }
 
-void ChordTextAudioProcessor::getStateInformation (juce::MemoryBlock&)
+void ChordTextAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
+    auto state = apvts.copyState();
+    state.setProperty ("progressionText", getProgressionText(), nullptr);
+
+    if (auto xml = state.createXml())
+        copyXmlToBinary (*xml, destData);
 }
 
-void ChordTextAudioProcessor::setStateInformation (const void*, int)
+void ChordTextAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
+    auto xml = getXmlFromBinary (data, sizeInBytes);
+
+    if (xml == nullptr)
+        return;
+
+    const auto tree = juce::ValueTree::fromXml (*xml);
+
+    if (! tree.isValid() || ! tree.hasType (apvts.state.getType()))
+        return;
+
+    cancelPendingUpdate();
+    apvts.replaceState (tree);
+    cancelPendingUpdate();
+    rebuildPlan();
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
