@@ -657,7 +657,7 @@ int main()
         CHECK (midiFile.getTimeFormat() == 960);
         CHECK (midiFile.getNumTracks() >= 1);
 
-        int noteOns = 0, noteOffs = 0, tempoEvents = 0;
+        int noteOns = 0, noteOffs = 0, tempoEvents = 0, timeSignatureEvents = 0;
         std::vector<double> noteOnTicks;
         for (int t = 0; t < midiFile.getNumTracks(); ++t)
         {
@@ -677,12 +677,14 @@ int main()
                     ++tempoEvents;
                     CHECK_NEAR (message.getTempoSecondsPerQuarterNote(), 0.5, 0.001);
                 }
+                if (message.isTimeSignatureMetaEvent()) ++timeSignatureEvents;
             }
         }
 
         CHECK (noteOns == 8);
         CHECK (noteOffs == 8);
         CHECK (tempoEvents >= 1);
+        CHECK (timeSignatureEvents >= 1);
         CHECK (noteOnTicks.size() == 8);
         for (int i = 0; i < 4; ++i)
             CHECK (noteOnTicks[(size_t) i] == 0.0);
@@ -806,6 +808,82 @@ int main()
         regenerate->triggerClick();
         CHECK (p.getLearningRows().size() == 1);
         CHECK (! p.getDiagnostics().empty());
+    }
+
+    // drag clip is one loop, with no tempo or time-signature metadata
+    {
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("Cmaj7:2, G7:2");
+
+        juce::String error;
+        const auto file = p.createDragClipFile (error);
+        CHECK (error.isEmpty());
+        CHECK (file.existsAsFile());
+        CHECK (p.getLastDragClipFile() == file);
+        CHECK (file.getParentDirectory().getFileName() == "Clips");
+        CHECK (file.getParentDirectory().getParentDirectory().getFileName() == "ChordText");
+        CHECK (file.getFileName().startsWith ("ChordText-"));
+
+        juce::FileInputStream in (file);
+        CHECK (in.openedOk());
+        juce::MidiFile midiFile;
+        CHECK (midiFile.readFrom (in));
+
+        int noteOns = 0, noteOffs = 0, tempoEvents = 0, timeSignatureEvents = 0;
+        std::vector<double> noteOnTicks;
+        std::vector<double> noteOffTicks;
+
+        for (int t = 0; t < midiFile.getNumTracks(); ++t)
+        {
+            const auto* track = midiFile.getTrack (t);
+            for (int i = 0; i < track->getNumEvents(); ++i)
+            {
+                const auto* event = track->getEventPointer (i);
+                const auto message = event->message;
+
+                if (message.isNoteOn())
+                {
+                    ++noteOns;
+                    noteOnTicks.push_back (event->message.getTimeStamp());
+                    CHECK (message.getChannel() == 1);
+                }
+                if (message.isNoteOff())
+                {
+                    ++noteOffs;
+                    noteOffTicks.push_back (event->message.getTimeStamp());
+                }
+                if (message.isTempoMetaEvent()) ++tempoEvents;
+                if (message.isTimeSignatureMetaEvent()) ++timeSignatureEvents;
+            }
+        }
+
+        CHECK (noteOns == 8);
+        CHECK (noteOffs == 8);
+        CHECK (tempoEvents == 0);
+        CHECK (timeSignatureEvents == 0);
+        CHECK (noteOnTicks.size() == 8);
+        CHECK (noteOffTicks.size() == 8);
+
+        for (int i = 0; i < 4; ++i)
+            CHECK (noteOnTicks[(size_t) i] == 0.0);
+        for (int i = 4; i < 8; ++i)
+            CHECK (noteOnTicks[(size_t) i] == 2.0 * 960.0);
+        for (int i = 0; i < 4; ++i)
+            CHECK (noteOffTicks[(size_t) i] == 2.0 * 960.0);
+        for (int i = 4; i < 8; ++i)
+            CHECK (noteOffTicks[(size_t) i] == 4.0 * 960.0);
+
+        file.deleteFile();
+    }
+
+    // invalid text produces no drag file
+    {
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("H");
+        juce::String error;
+        const auto file = p.createDragClipFile (error);
+        CHECK (! file.existsAsFile());
+        CHECK (error.isNotEmpty());
     }
 
     return reportAndExit();

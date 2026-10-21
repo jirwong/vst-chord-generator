@@ -290,8 +290,8 @@ void ChordTextAudioProcessor::publishPlan (chordtext::RenderPlan plan)
     writePlanIndex = static_cast<int> (previous & planIndexMask);
 }
 
-bool ChordTextAudioProcessor::exportMidiFile (const juce::File& file,
-                                              juce::String& errorMessage)
+bool ChordTextAudioProcessor::writeMidiFile (const juce::File& file, MidiFileMode mode,
+                                             juce::String& errorMessage)
 {
     errorMessage.clear();
 
@@ -307,12 +307,6 @@ bool ChordTextAudioProcessor::exportMidiFile (const juce::File& file,
         return false;
     }
 
-    // getPlayHead()->getPosition() is only valid during processBlock. Use the
-    // tempo cached by the audio thread, and fall back to 120 BPM until a block
-    // has supplied a usable tempo.
-    const auto cachedBpm = lastHostBpm.load (std::memory_order_relaxed);
-    const auto bpm = cachedBpm > 0.0 && std::isfinite (cachedBpm) ? cachedBpm : 120.0;
-
     constexpr double ticksPerQuarterNote = 960.0;
 
     juce::MidiFile midiFile;
@@ -320,10 +314,22 @@ bool ChordTextAudioProcessor::exportMidiFile (const juce::File& file,
 
     juce::MidiMessageSequence sequence;
     sequence.addEvent (juce::MidiMessage::textMetaEvent (3, "Chord Text"), 0.0);
-    sequence.addEvent (juce::MidiMessage::tempoMetaEvent (
-                           static_cast<int> (std::lround (60000000.0 / bpm))),
-                       0.0);
-    sequence.addEvent (juce::MidiMessage::timeSignatureMetaEvent (4, 4), 0.0);
+
+    // Drag clips inherit the host project tempo, so they must not carry a
+    // tempo or time-signature event. Only a standalone export is self-contained.
+    if (mode == MidiFileMode::exportFile)
+    {
+        // getPlayHead()->getPosition() is only valid during processBlock. Use the
+        // tempo cached by the audio thread, and fall back to 120 BPM until a block
+        // has supplied a usable tempo.
+        const auto cachedBpm = lastHostBpm.load (std::memory_order_relaxed);
+        const auto bpm = cachedBpm > 0.0 && std::isfinite (cachedBpm) ? cachedBpm : 120.0;
+
+        sequence.addEvent (juce::MidiMessage::tempoMetaEvent (
+                               static_cast<int> (std::lround (60000000.0 / bpm))),
+                           0.0);
+        sequence.addEvent (juce::MidiMessage::timeSignatureMetaEvent (4, 4), 0.0);
+    }
 
     auto events = exportPlan.events;
     std::stable_sort (events.begin(), events.end(),
@@ -368,6 +374,53 @@ bool ChordTextAudioProcessor::exportMidiFile (const juce::File& file,
     }
 
     return true;
+}
+
+bool ChordTextAudioProcessor::exportMidiFile (const juce::File& file,
+                                              juce::String& errorMessage)
+{
+    return writeMidiFile (file, MidiFileMode::exportFile, errorMessage);
+}
+
+juce::File ChordTextAudioProcessor::createDragClipFile (juce::String& errorMessage)
+{
+    errorMessage.clear();
+
+    if (! diagnostics.empty())
+    {
+        errorMessage = "Cannot create a clip while the progression has errors.";
+        return {};
+    }
+
+    if (exportPlan.events.empty())
+    {
+        errorMessage = "Cannot create a clip for an empty progression.";
+        return {};
+    }
+
+    const auto folder = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                            .getChildFile ("ChordText")
+                            .getChildFile ("Clips");
+
+    if (! folder.createDirectory())
+    {
+        errorMessage = "Cannot create the clips folder " + folder.getFullPathName() + ".";
+        return {};
+    }
+
+    const auto stamp = juce::Time::getCurrentTime().formatted ("%Y%m%d-%H%M%S");
+    const auto file = folder.getNonexistentChildFile ("ChordText-" + stamp, ".mid", false);
+
+    if (! writeMidiFile (file, MidiFileMode::dragClip, errorMessage))
+        return {};
+
+    lastDragClipFile = file;
+    return file;
+}
+
+juce::File ChordTextAudioProcessor::getLastDragClipFile() const
+{
+    return lastDragClipFile;
 }
 
 void ChordTextAudioProcessor::cacheActivePitchesForRelease()

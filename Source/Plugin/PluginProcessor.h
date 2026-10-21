@@ -49,6 +49,11 @@ public:
     // Message thread only. Uses the same plan as live playback.
     bool exportMidiFile (const juce::File& file, juce::String& errorMessage);
 
+    // Message thread only. Writes a drag-and-drop clip to the user's
+    // Documents\ChordText\Clips folder.
+    juce::File createDragClipFile (juce::String& errorMessage);
+    juce::File getLastDragClipFile() const;
+
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override;
     const juce::String getName() const override;
@@ -72,6 +77,12 @@ private:
 
     // Message thread only. Never call from processBlock.
     void publishPlan (chordtext::RenderPlan plan);
+
+    enum class MidiFileMode { exportFile, dragClip };
+
+    // Message thread only.
+    bool writeMidiFile (const juce::File& file, MidiFileMode mode,
+                        juce::String& errorMessage);
 
     chordtext::Key selectedKey() const;
     int parameterIndex (const juce::String& parameterID) const;
@@ -125,4 +136,5 @@ private:
     std::vector<chordtext::Diagnostic> diagnostics;
     std::vector<LearningRow> learningRows;
     chordtext::RenderPlan exportPlan;
+    juce::File lastDragClipFile;
 };
