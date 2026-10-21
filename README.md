@@ -142,8 +142,11 @@ that case.
 The progression is anchored to song position 0. Starting or seeking into the middle
 of a chord plays that chord from the start of the block, and the progression loops
 with a length equal to the sum of the chord durations. Loop is on by default; with
-loop off, the progression plays once. Stop, seek, bypass, prepare, plan changes, and
-loop wrap release active notes before new ones are emitted.
+loop off, the progression plays once. Stop, seek, bypass, plan changes, and loop wrap
+release active notes before new ones are emitted. When the host calls
+`prepareToPlay` again, the plugin clears its internal active-note and scheduling
+state without emitting note-offs; the host is expected to have stopped or flushed
+any sounding notes before re-preparing.
 
 ## Syntax reference
 
@@ -325,9 +328,10 @@ The table shows the last valid progression:
 
 The Notes column follows the current voicing and range and uses each chord's spelled
 tones, so Roman numerals inherit the key's spelling. The Degree column is a
-normalized functional label; absolute chords are mapped to the nearest
-scale degree by pitch class. Chromatic or ambiguous roots use a best-effort `b`/`#`
-label. The row for the currently playing chord is highlighted during playback.
+normalized functional label; absolute chords are labeled best-effort relative to the
+selected key using the root letter and accidental (not by nearest pitch class).
+Chromatic or ambiguous roots use a best-effort `b`/`#` label. The row for the
+currently playing chord is highlighted during playback.
 
 ### Errors and diagnostics
 
@@ -359,8 +363,10 @@ All notes are sent on MIDI channel 1. Root-position voicing places the root at t
 lowest octave that fits the range and stacks the remaining tones above it. Voice-led
 voicing keeps the first chord in root position and then chooses the inversion and
 octave placement that minimizes movement from the previous chord, staying within the
-selected range. Slash bass remains the lowest note in both modes. Each chord tone
-appears once; v1 does not double octaves.
+selected range. Slash bass remains the lowest note in both modes. The upper voices
+contain each chord tone once. A slash bass may duplicate its pitch class an octave
+below the upper chord tones (for example, `C/E` sounds two E's); v1 has no other
+octave doubling.
 
 The project state saves the progression text, key, mode, voicing, range, velocity,
 and loop setting through stable parameter IDs (`key`, `mode`, `voicing`, `range`,
@@ -431,8 +437,16 @@ Known limitations in v1:
 - Slash bass and applied chords (`V/V`) are unsupported on Roman numerals.
 - Parenthesised alterations are unsupported, and `Cb5`/`C#5` are read as root
   accidentals before the `5` quality (see above).
-- Chord tones each sound once; there is no octave doubling and no rootless voicing.
+- Each upper chord tone sounds once, but a slash bass may duplicate its pitch class
+  an octave below (for example, `C/E`). There is no other octave doubling and no
+  rootless voicing.
 - The Degree column is best-effort for chromatic or ambiguous roots.
+- The editor displays only the first two parse diagnostics (with `...` when there
+  are more). The processor retains the complete list, but the editor does not show
+  every diagnostic.
+- `prepareToPlay` and `releaseResources` clear internal note tracking without
+  emitting note-offs; the host is expected to flush sounding notes before
+  re-preparing or releasing the plugin.
 - Only one progression is active at a time; there are no saved presets beyond the
   host project state.
 
@@ -461,11 +475,20 @@ automated verification, so they remain unverified until someone runs them.
       different, valid voicings.
 - [ ] Start, stop, seek, loop, and bypass during playback; confirm there are no
       stuck notes.
+- [ ] Switch keys and confirm Roman numerals resolve against the selected key while
+      absolute chord symbols stay unchanged.
+- [ ] Switch among the C2–C5, C3–C6, and C4–C7 ranges and confirm every generated
+      note stays within the selected range.
+- [ ] Change velocity and confirm generated notes use the new value.
+- [ ] Toggle loop off and confirm the progression plays once, then toggle it on and
+      confirm it loops; confirm no notes stick at either transition.
 - [ ] Record generated notes into the piano roll and verify timing against the host
       grid.
 - [ ] Export a `.mid`, import it, and compare it with live playback.
 - [ ] Enter invalid text and confirm the last valid progression keeps playing with
       clear diagnostics.
+- [ ] Confirm the learning table shows the expected degrees and spelled notes for
+      the current key and voicing.
 - [ ] Save and reload the project; confirm the text, key, mode, voicing, range,
       velocity, and loop setting restore.
 
