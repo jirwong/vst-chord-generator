@@ -24,7 +24,9 @@ set(THEORY_SOURCES
     Source/Theory/Progression.cpp
     Source/Theory/Voicer.cpp
     Source/Theory/RenderPlan.cpp)
-set(PLUGIN_SOURCES Source/Plugin/PluginProcessor.cpp)
+set(PLUGIN_SOURCES
+    Source/Plugin/PluginProcessor.cpp
+    Source/Plugin/PluginEditor.cpp)
 
 juce_add_plugin(ChordText
     COMPANY_NAME "jirwo"

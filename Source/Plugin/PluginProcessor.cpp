@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 
+#include "PluginEditor.h"
 #include "Theory/Key.h"
 #include "Theory/Progression.h"
 #include "Theory/Voicer.h"
@@ -641,12 +642,12 @@ bool ChordTextAudioProcessor::isTransportAvailable() const
 
 juce::AudioProcessorEditor* ChordTextAudioProcessor::createEditor()
 {
-    return nullptr;
+    return new ChordTextAudioProcessorEditor (*this);
 }
 
 bool ChordTextAudioProcessor::hasEditor() const
 {
-    return false;
+    return true;
 }
 
 const juce::String ChordTextAudioProcessor::getName() const

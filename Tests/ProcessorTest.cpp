@@ -4,6 +4,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include <algorithm>
+#include <memory>
 #include <vector>
 
 class FakePlayHead : public juce::AudioPlayHead
@@ -639,6 +640,19 @@ int main()
         CHECK (! empty.exportMidiFile (file, emptyError));
         CHECK (! emptyError.isEmpty());
         CHECK (! file.existsAsFile());
+    }
+
+    // editor smoke test: fixed size, created by the processor
+    {
+        ChordTextAudioProcessor p;
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        CHECK (editor != nullptr);
+
+        if (editor != nullptr)
+        {
+            CHECK (editor->getWidth() == 760);
+            CHECK (editor->getHeight() == 560);
+        }
     }
 
     return reportAndExit();
