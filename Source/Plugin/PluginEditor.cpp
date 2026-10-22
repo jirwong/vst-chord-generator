@@ -268,12 +268,15 @@ void ChordTextAudioProcessorEditor::resized()
     loopButton.setBounds (x, controlFields.getY(), fieldWidth,
                           controlFields.getHeight());
 
-    auto statusRow = bounds.removeFromTop (28);
-    exportButton.setBounds (statusRow.removeFromRight (140));
-    statusRow.removeFromRight (8);
-    revealClipButton.setBounds (statusRow.removeFromRight (140));
-    statusRow.removeFromRight (8);
-    statusLabel.setBounds (statusRow);
+    auto statusLabelRow = bounds.removeFromTop (20);
+    statusLabel.setBounds (statusLabelRow);
+    bounds.removeFromTop (4);
+
+    // Actions get their own row so a long status/filename is not squeezed.
+    auto actionRow = bounds.removeFromTop (28);
+    exportButton.setBounds (actionRow.removeFromRight (140));
+    actionRow.removeFromRight (8);
+    revealClipButton.setBounds (actionRow.removeFromRight (140));
     bounds.removeFromTop (6);
 
     auto diagnosticsArea = bounds.removeFromBottom (68);
@@ -308,14 +311,6 @@ void ChordTextAudioProcessorEditor::applyProgressionText (bool force)
 
     if (force || text != processor.getProgressionText())
         processor.setProgressionText (text);
-}
-
-void ChordTextAudioProcessorEditor::RegenerateButton::triggerClick()
-{
-    // Button::triggerClick() posts an asynchronous command message. A forced
-    // regenerate must update the plan before the call returns.
-    if (onClick != nullptr)
-        onClick();
 }
 
 void ChordTextAudioProcessorEditor::startExport()
@@ -394,7 +389,20 @@ void ChordTextAudioProcessorEditor::refreshStatus()
 
     const bool canDrag = diagnostics.empty() && ! rows.empty();
     clipDrag.setLoopInfo (totalBeats, canDrag);
-    revealClipButton.setEnabled (processor.getLastDragClipFile().existsAsFile());
+
+    // Check the last drag file only when its path changes instead of doing a
+    // file-system stat on every 30 Hz timer tick. Reveal is session-only; an
+    // external deletion of the file is an accepted edge case.
+    const auto lastDragFile = processor.getLastDragClipFile();
+    const auto lastDragPath = lastDragFile.getFullPathName();
+
+    if (lastDragPath != lastRevealPath)
+    {
+        lastRevealPath = lastDragPath;
+        lastRevealAvailable = lastDragPath.isNotEmpty() && lastDragFile.existsAsFile();
+    }
+
+    revealClipButton.setEnabled (lastRevealAvailable);
 
     const auto canExport = fileChooser == nullptr
                            && diagnostics.empty()

@@ -39,6 +39,9 @@ juce::String describeLoop (double beats)
 
 void ClipDragComponent::setLoopInfo (double beats, bool enabled)
 {
+    if (loopBeats == beats && canDrag == enabled && isEnabled() == enabled)
+        return;
+
     loopBeats = beats;
     canDrag = enabled;
     setEnabled (enabled);
@@ -74,7 +77,11 @@ void ClipDragComponent::paint (juce::Graphics& g)
 
     g.setColour (enabled ? clipDimTextColour : clipErrorTextColour);
     g.setFont (juce::Font (juce::FontOptions (12.0f)));
-    g.drawText (enabled ? describeLoop (loopBeats) : juce::String ("Fix errors to drag"),
+
+    const auto hint = loopBeats > 0.0 ? juce::String ("Fix errors to drag")
+                                      : juce::String ("Enter a progression to drag");
+
+    g.drawText (enabled ? describeLoop (loopBeats) : hint,
                 detailArea, juce::Justification::centredLeft, true);
 }
 
@@ -86,7 +93,7 @@ void ClipDragComponent::mouseDown (const juce::MouseEvent& event)
 
 void ClipDragComponent::mouseDrag (const juce::MouseEvent& event)
 {
-    if (! canDrag || dragStarted)
+    if (! event.mods.isLeftButtonDown() || ! canDrag || dragStarted)
         return;
 
     // A click must not create a file; wait for a deliberate drag gesture.
@@ -103,10 +110,13 @@ void ClipDragComponent::mouseDrag (const juce::MouseEvent& event)
     juce::StringArray files;
     files.add (file.getFullPathName());
 
-    const auto dragStartedOk = juce::DragAndDropContainer::performExternalDragDropOfFiles (
+    const auto dragQueued = juce::DragAndDropContainer::performExternalDragDropOfFiles (
         files, false, this);
 
     if (onStatus != nullptr)
-        onStatus (dragStartedOk ? "Clip saved: " + file.getFileName()
-                                : juce::String ("Clip saved; drag could not start."));
+    {
+        const auto saved = "Clip saved: " + file.getFileName();
+        onStatus (dragQueued ? saved + "; drag requested."
+                             : saved + "; drag could not be queued.");
+    }
 }

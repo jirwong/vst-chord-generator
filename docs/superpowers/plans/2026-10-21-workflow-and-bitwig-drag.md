@@ -524,8 +524,8 @@ files.add (file.getFullPathName());
 juce::DragAndDropContainer::performExternalDragDropOfFiles (files, false, this);
 ```
 
-- report `Clip saved: <filename>` through `onStatus`; if the drag could not start,
-  report `Clip saved; drag could not start.`
+- report `Clip saved: <filename>; drag requested.` through `onStatus`; if the drag
+  could not be queued, report `Clip saved: <filename>; drag could not be queued.`
 
 - [ ] **Step 4: Wire the component into the editor**
 
@@ -671,14 +671,14 @@ git commit -m "Document regenerate, beats, and Bitwig drag workflow"
 
 | Spec requirement | Verified by |
 |---|---|
-| Regenerate forces rebuild | Task 1 editor test |
-| Auto-parse remains | Task 1 timer code review, Task 4 manual check |
-| Beats column | Task 1 processor test, Task 4 manual check |
+| Regenerate forces rebuild | Task 1 editor tests (changed text, and unchanged text after a key change) |
+| Auto-parse remains | Task 1 editor auto-parse test (`sendNotification` edit + timer debounce) |
+| Beats column | Task 1 processor duration test and editor table-header test |
 | Invalid text preserves plan | Task 1 editor test |
 | Drag file one loop / ticks | Task 2 processor test |
 | Drag file has no tempo/signature | Task 2 processor test |
 | Export still has tempo/signature | Task 2 export test |
-| Clip preview enabled only when valid | Task 3 editor test |
+| Clip preview enabled only when valid | Task 3 editor test driving `refreshStatus` through the timer |
 | Reveal enabled after a drag file | Task 3 editor test |
-| Bitwig direct drop and fallback | Task 4 manual checklist |
+| Bitwig direct drop and fallback | Task 4 manual checklist (still an open human gate) |
 | Full build and tests | Task 4 `./build.sh --test` |

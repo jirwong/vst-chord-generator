@@ -385,7 +385,7 @@ present.
 | Velocity | 100 | 1–127 |
 | Loop | On | On or off |
 | Drag to DAW | — | Drags one loop as a `.mid` file; enabled for valid, non-empty progressions |
-| Reveal last clip | — | Opens Explorer at the last drag file; enabled once a file exists |
+| Reveal last clip | — | Opens Explorer at the last drag file; enabled after a drag in this session |
 
 All notes are sent on MIDI channel 1. Root-position voicing places the root at the
 lowest octave that fits the range and stacks the remaining tones above it. Voice-led
@@ -435,13 +435,16 @@ Export retains the tempo event (the last observed host tempo, or 120 BPM) and th
 
 The editor contains a clip-shaped **Drag to DAW** preview. It shows the loop length,
 for example `16 beats · 4 bars (4/4)`, computed as the sum of the chord durations.
-Dragging starts only after a small mouse movement, so a click does not create a
-file.
+A left-button drag starts only after a small mouse movement, so a click does not
+create a file.
 
-The preview is enabled only when the current text parses successfully and the plan
-contains at least one note. While it is disabled it shows `Fix errors to drag`.
-Starting a drag forces a parse of the current text first, using the same path as
-Regenerate. If parsing fails, no file is created and the diagnostics are shown.
+The preview is enabled after the last successful parse, when that plan contains at
+least one note. While a debounced edit is pending it reflects the last parsed text,
+not the characters just typed. An empty progression also disables the preview.
+While it is disabled it shows `Fix errors to drag`, or
+`Enter a progression to drag` when the progression is empty. Starting a drag forces
+a parse of the current text first, using the same path as Regenerate. If parsing
+fails, no file is created and the diagnostics are shown.
 
 A drag writes exactly one loop cycle at the current key, mode, voicing, range, and
 velocity settings. The file uses the same notes, 960 ticks per quarter note, MIDI
@@ -460,21 +463,27 @@ Documents\ChordText\Clips
 
 The folder is created if missing. Each file is named
 `ChordText-YYYYMMDD-HHMMSS.mid` using local time, so repeated drags do not
-overwrite earlier clips. Files are never deleted automatically in v1: a clip may
-already be referenced by a saved DAW project, and removing its source would break
-that project.
+overwrite earlier clips. If two drags happen in the same second, a numeric suffix is
+added to the timestamped name instead of overwriting the existing file. Files are
+never deleted automatically in v1: a clip may already be referenced by a saved DAW
+project, and removing its source would break that project.
 
 ### Fallback: Reveal last clip
 
 Every started drag leaves a real file in the clips folder, whether or not the DAW
-accepts the drop. The plugin cannot detect whether the drop succeeded, so the
-status line reports the saved filename after the drag, for example
-`Clip saved: ChordText-20261022-143015.mid`. If the drag could not be started, it
-reports `Clip saved; drag could not start.`
+accepts the drop. The plugin cannot detect whether the drop succeeded, so the status
+line reports the saved filename and that the drag was requested, for example
+`Clip saved: ChordText-20261022-143015.mid; drag requested.` If the drag could not be
+queued, it reports
+`Clip saved: ChordText-20261022-143015.mid; drag could not be queued.` Neither
+message claims that the DAW accepted the drop.
 
-**Reveal last clip** sits next to **Export .mid**. It is enabled once a drag file
-exists and opens Explorer with that file selected. If Bitwig ignores the external
-drag, click Reveal last clip and drag the file from Explorer into Bitwig.
+**Reveal last clip** sits next to **Export .mid**. It is enabled once a drag file has
+been created in the current plugin session and opens Explorer with that file
+selected. The last drag path is session-only and is not saved with the project, so
+Reveal starts disabled after reloading even if earlier clip files still exist in the
+folder. If Bitwig ignores the external drag, click Reveal last clip and drag the file
+from Explorer into Bitwig.
 
 ### Bitwig notes
 
@@ -512,7 +521,7 @@ Or run the already-built executables directly:
 ```
 
 Each executable prints a summary such as `87 checks, 0 failures` for `TheoryTests`
-and `200 checks, 0 failures` for `ProcessorTests`, and returns a non-zero exit code
+and `233 checks, 0 failures` for `ProcessorTests`, and returns a non-zero exit code
 if any check fails. The build scripts stop on the first failing suite. The build must
 produce no warnings from project code under JUCE's recommended warning flags.
 

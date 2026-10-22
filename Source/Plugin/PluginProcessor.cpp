@@ -412,7 +412,12 @@ juce::File ChordTextAudioProcessor::createDragClipFile (juce::String& errorMessa
     const auto file = folder.getNonexistentChildFile ("ChordText-" + stamp, ".mid", false);
 
     if (! writeMidiFile (file, MidiFileMode::dragClip, errorMessage))
+    {
+        // A failed write can leave a partial file behind. Remove it and keep
+        // lastDragClipFile pointing at the last successful clip.
+        file.deleteFile();
         return {};
+    }
 
     lastDragClipFile = file;
     return file;
