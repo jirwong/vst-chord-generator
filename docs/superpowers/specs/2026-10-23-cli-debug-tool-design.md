@@ -197,13 +197,13 @@ The report contains:
 
 ```text
 Progression: Cmaj7, Am7, Dm7, G7
-Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100
+Key: C major · Voicing: root-position · Range: C2-C5 · Velocity: 100
 
-Chord  Degree  Notes     Beats  MIDI
-Cmaj7  Imaj7   C E G B   4      48 52 55 59
-Am7    vi7     A C E G   4      45 48 52 55
-Dm7    ii7     D F A C   4      50 53 57 60
-G7     V7      G B D F   4      43 47 50 53
+Chord  Degree  Notes    Beats  MIDI
+Cmaj7  Imaj7   C E G B  4      36 40 43 47
+Am7    vi7     A C E G  4      45 48 52 55
+Dm7    ii7     D F A C  4      38 41 45 48
+G7     V7      G B D F  4      43 47 50 53
 ```
 
 Rules:
