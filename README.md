@@ -16,8 +16,8 @@ must be routed to an instrument in the host.
 - CMake 3.22 or newer. The copy shipped with Build Tools is sufficient; the build
   scripts find it by full path when it is not on `PATH`.
 - Git.
-- FL Studio 2025 for manual in-host verification (optional for building and running
-  the automated tests).
+- A VST3-compatible DAW for manual in-host verification (optional for building and
+  running the automated tests).
 
 The project uses C++17 and depends only on JUCE and the C++ standard library. The
 theory library itself has no JUCE dependency.
@@ -84,7 +84,7 @@ suite fails.
 - Test executables: `build/Tests/TheoryTests.exe` and
   `build/Tests/ProcessorTests.exe`
 
-## Install and route in FL Studio
+## Install and route in a DAW
 
 Chord Text is a VST3 MIDI effect (`IS_MIDI_EFFECT TRUE`, MIDI input and output
 enabled, no audio buses). Incoming MIDI is ignored in v1.
@@ -100,11 +100,10 @@ C:\Program Files\Common Files\VST3
 
 or leave it in the build tree and add the folder as a plugin search path:
 
-1. In FL Studio, open **Options > Manage plugins**.
-2. Add
+1. In the DAW's plugin settings, add
    `...\chord-generator\build\ChordText_artefacts\Release\VST3`
-   to the additional VST search paths.
-3. Start a plugin scan and confirm that **Chord Text** appears as a MIDI effect /
+   to the additional VST3 search paths.
+2. Start a plugin scan and confirm that **Chord Text** appears as a MIDI effect /
    generator.
 
 ### Route to an instrument
@@ -112,20 +111,19 @@ or leave it in the build tree and add the folder as a plugin search path:
 The plugin must drive another instrument; it makes no sound by itself. Two common
 routes are:
 
-- **Patcher:** add a Patcher channel, insert **Chord Text**, insert an instrument
-  (for example a synth or sampler), and connect Chord Text's MIDI output to the
-  instrument's MIDI input.
-- **Plugin wrapper MIDI ports:** load Chord Text in a channel, then route its MIDI
-  output port to a second channel/instrument whose MIDI input port matches.
+- **Host plugin chain:** insert **Chord Text** before an instrument (for example a
+  synth or sampler) in the same channel or instrument chain so the plugin's MIDI
+  output feeds the instrument's MIDI input directly.
+- **MIDI output ports:** load Chord Text in one channel, then route its MIDI output
+  port to a second channel/instrument whose MIDI input port matches.
 
-The exact routing steps depend on the FL Studio version and wrapper. In-host routing
-is part of the manual checklist below and has **not** been verified in this
-environment.
+The exact routing steps depend on the DAW and its plugin wrapper. In-host routing is
+part of the manual checklist below and has **not** been verified in this environment.
 
 ## Quick start
 
 1. Load Chord Text in a channel and route it to an instrument.
-2. Press Play in FL Studio. The default progression
+2. Press Play in the DAW. The default progression
    `Cmaj7, Am7, Dm7, G7` plays, one chord per 4/4 bar, and loops.
 3. Type a progression in the text box. Parsing is debounced by 150 ms, so playback
    updates shortly after typing stops.
@@ -479,12 +477,13 @@ Explicitly out of scope for v1:
 - custom UI styling, a built-in synth, and audio output;
 - automated CI.
 
-## Manual FL Studio verification checklist
+## Manual DAW verification checklist
 
 Automated tests cover parsing, voicing, transport, note lifecycle, state, and MIDI
-export. The following host checks require FL Studio 2025 and a human at the keyboard.
-They are documented here but were **not** performed as part of this repository's
-automated verification, so they remain unverified until someone runs them.
+export. The following host checks require a VST3-compatible DAW and a human at the
+keyboard. They are documented here but were **not** performed as part of this
+repository's automated verification, so they remain unverified until someone runs
+them.
 
 - [ ] Route **Chord Text** to an instrument and hear the default progression.
 - [ ] Change the text to `C, Cmaj7, Dmaj7, Emin9, Fmaj7` and confirm the notes.
