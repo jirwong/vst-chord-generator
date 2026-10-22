@@ -235,7 +235,7 @@ Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100
 
 2 errors:
 Error at character 3: unknown chord root (H)
-Error at character 6: unknown extension "99" (C99)
+Error at character 6: unknown extension "9" (C99)
 ```
 
 - The count line is `1 error:` or `N errors:`.

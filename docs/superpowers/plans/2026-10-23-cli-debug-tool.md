@@ -785,7 +785,7 @@ const std::string expectedInvalid =
     "\n"
     "2 errors:\n"
     "Error at character 3: unknown chord root (H)\n"
-    "Error at character 6: unknown extension \"99\" (C99)\n";
+    "Error at character 6: unknown extension \"9\" (C99)\n";
 CHECK (formatHuman (invalid) == expectedInvalid);
 
 const auto empty = buildReport ("   ", CliSettings {});
