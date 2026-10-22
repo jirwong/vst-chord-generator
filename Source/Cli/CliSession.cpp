@@ -266,6 +266,12 @@ CliSessionOutput CliSession::handleLine (std::string_view line)
             return output;
         }
 
+        if (rest.empty())
+        {
+            output.feedback = "Error: missing path for :export\n";
+            return output;
+        }
+
         const auto path = resolveMidiPath (rest);
         std::string error;
 

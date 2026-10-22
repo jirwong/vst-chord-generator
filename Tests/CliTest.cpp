@@ -103,6 +103,19 @@ int main()
         CHECK (! result.error.empty());
     }
 
+    parsed = parseOptions ({ "-h" });
+    CHECK (parsed.status == CliParseStatus::usageError);
+    CHECK (parsed.error.find ("Unknown option") != std::string::npos);
+
+    parsed = parseOptions ({ "-k", "A", "i-iv-V" });
+    CHECK (parsed.status == CliParseStatus::usageError);
+
+    parsed = parseOptions ({ "--out=", "C" });
+    CHECK (parsed.status == CliParseStatus::usageError);
+
+    parsed = parseOptions ({ "--out", "", "C" });
+    CHECK (parsed.status == CliParseStatus::usageError);
+
     CHECK (! helpText().empty());
     CHECK (helpText().find ("--key") != std::string::npos);
     CHECK (helpText().find ("--out") != std::string::npos);
@@ -158,6 +171,9 @@ int main()
         "Error at character 3: unknown chord root (H)\n"
         "Error at character 6: unknown extension \"9\" (C99)\n";
     CHECK (formatHuman (invalid) == expectedInvalid);
+
+    const auto singleError = buildReport ("C, H", CliSettings {});
+    CHECK (formatHuman (singleError).find ("1 error:\n") != std::string::npos);
 
     const auto empty = buildReport ("   ", CliSettings {});
     CHECK (empty.valid);
@@ -321,6 +337,32 @@ int main()
     CHECK (! std::filesystem::exists (blocker / "out.mid"));
 
     std::filesystem::remove_all (temp);
+
+    const auto originalCwd = std::filesystem::current_path();
+    const auto cwdTemp = std::filesystem::temp_directory_path()
+                             / "chordtext-cli-export-empty-test";
+    std::filesystem::remove_all (cwdTemp);
+    std::filesystem::create_directories (cwdTemp);
+    std::filesystem::current_path (cwdTemp);
+
+    CliSession emptyPath;
+    emptyPath.handleLine ("Cmaj7");
+    output = emptyPath.handleLine (":export");
+    CHECK (output.feedback.find ("missing path") != std::string::npos);
+
+    bool anyMidInCwd = false;
+    for (const auto& entry : std::filesystem::directory_iterator (cwdTemp))
+    {
+        if (entry.path().extension() == ".mid")
+        {
+            anyMidInCwd = true;
+            break;
+        }
+    }
+    CHECK (! anyMidInCwd);
+
+    std::filesystem::current_path (originalCwd);
+    std::filesystem::remove_all (cwdTemp);
 
     CliOptions oneShot;
     auto run = runOneShot ("Cmaj7", oneShot);

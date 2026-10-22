@@ -779,7 +779,7 @@ Or run the already-built executables directly:
 ```
 
 Each executable prints a summary such as `115 checks, 0 failures` for `TheoryTests`,
-`233 checks, 0 failures` for `ProcessorTests`, and `193 checks, 0 failures` for
+`233 checks, 0 failures` for `ProcessorTests`, and `204 checks, 0 failures` for
 `CliTests`, and returns a non-zero exit code if any check fails. The build scripts
 stop on the first failing suite. The build must produce no warnings from project
 code under JUCE's recommended warning flags.

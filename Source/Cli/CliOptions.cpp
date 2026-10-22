@@ -33,7 +33,7 @@ CliParseResult parseOptions (const std::vector<std::string>& args)
             continue;
         }
 
-        if (! positionalOnly && arg.size() >= 2 && arg[0] == '-' && arg[1] == '-')
+        if (! positionalOnly && ! arg.empty() && arg[0] == '-')
         {
             auto name = arg;
             std::optional<std::string> attachedValue;
@@ -144,6 +144,8 @@ CliParseResult parseOptions (const std::vector<std::string>& args)
                 std::string value;
                 if (! requireValue (value))
                     return CliParseResult { CliParseStatus::usageError, {}, "Missing value for --out" };
+                if (value.empty())
+                    return CliParseResult { CliParseStatus::usageError, {}, "Empty value for --out" };
                 options.outputPath = value;
             }
             else
