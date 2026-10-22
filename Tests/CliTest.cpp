@@ -2,6 +2,7 @@
 #include "Cli/CliFile.h"
 #include "Cli/CliOptions.h"
 #include "Cli/CliReport.h"
+#include "Cli/CliRun.h"
 #include "Cli/CliSession.h"
 #include "Cli/CliSettings.h"
 
@@ -317,6 +318,79 @@ int main()
     CHECK (! std::filesystem::exists (blocker / "out.mid"));
 
     std::filesystem::remove_all (temp);
+
+    CliOptions oneShot;
+    auto run = runOneShot ("Cmaj7", oneShot);
+    CHECK (run.exitCode == 0);
+    CHECK (run.standardError.empty());
+    CHECK (run.standardOutput.find ("Cmaj7") != std::string::npos);
+
+    run = runOneShot ("C99", oneShot);
+    CHECK (run.exitCode == 1);
+    CHECK (run.standardOutput.find ("Error at character") != std::string::npos);
+
+    run = runOneShot ("   ", oneShot);
+    CHECK (run.exitCode == 0);
+    CHECK (run.standardOutput.find ("Empty progression") != std::string::npos);
+
+    oneShot.settings.json = true;
+    run = runOneShot ("C99", oneShot);
+    CHECK (run.exitCode == 1);
+    CHECK (run.standardOutput.find ("\"valid\": false") != std::string::npos);
+    CHECK (run.standardError.empty());
+    oneShot.settings.json = false;
+
+    const auto runTemp = std::filesystem::temp_directory_path()
+                             / "chordtext-cli-run-test";
+    std::filesystem::remove_all (runTemp);
+    std::filesystem::create_directories (runTemp);
+
+    oneShot.outputPath = (runTemp / "one-shot").string();
+    run = runOneShot ("C, F, G", oneShot);
+    CHECK (run.exitCode == 0);
+    CHECK (run.standardOutput.find ("Wrote ") != std::string::npos);
+    CHECK (std::filesystem::exists (runTemp / "one-shot.mid"));
+    std::filesystem::remove (runTemp / "one-shot.mid");
+
+    oneShot.outputPath = (runTemp / "empty").string();
+    run = runOneShot ("   ", oneShot);
+    CHECK (run.exitCode == 2);
+    CHECK (run.standardError.find ("Cannot write MIDI for an empty progression")
+           != std::string::npos);
+    CHECK (! std::filesystem::exists (runTemp / "empty.mid"));
+
+    oneShot.outputPath = (runTemp / "invalid").string();
+    run = runOneShot ("C99", oneShot);
+    CHECK (run.exitCode == 1);
+    CHECK (! std::filesystem::exists (runTemp / "invalid.mid"));
+
+    const auto runBlocker = runTemp / "blocker";
+    {
+        std::ofstream blockerFile (runBlocker);
+        blockerFile << "x";
+    }
+    oneShot.outputPath = (runBlocker / "out").string();
+    run = runOneShot ("C", oneShot);
+    CHECK (run.exitCode == 2);
+    CHECK (! run.standardError.empty());
+    CHECK (! std::filesystem::exists (runBlocker / "out.mid"));
+
+    CliOptions jsonOptions;
+    jsonOptions.settings.json = true;
+    jsonOptions.outputPath = (runTemp / "json").string();
+    run = runOneShot ("C", jsonOptions);
+    CHECK (run.exitCode == 0);
+    CHECK (run.standardError.empty());
+    CHECK (run.standardOutput.find ("\"midiFile\": \"") != std::string::npos);
+    CHECK (std::filesystem::exists (runTemp / "json.mid"));
+
+    jsonOptions.outputPath = (runBlocker / "out").string();
+    run = runOneShot ("C", jsonOptions);
+    CHECK (run.exitCode == 2);
+    CHECK (run.standardError.empty());
+    CHECK (run.standardOutput.find ("\"error\": \"") != std::string::npos);
+
+    std::filesystem::remove_all (runTemp);
 
     return reportAndExit();
 }
