@@ -2,7 +2,11 @@
 #include "Cli/CliFile.h"
 #include "Cli/CliOptions.h"
 #include "Cli/CliReport.h"
+#include "Cli/CliSession.h"
 #include "Cli/CliSettings.h"
+
+#include <filesystem>
+#include <fstream>
 
 using namespace chordtext;
 using namespace chordtext::cli;
@@ -223,6 +227,96 @@ int main()
     withFile.error = "bad \"path\"";
     CHECK (formatJson (withFile).find ("\"error\": \"bad \\\"path\\\"\"")
            != std::string::npos);
+
+    CliSession session;
+    auto output = session.handleLine ("   ");
+    CHECK (output.report.empty());
+    CHECK (output.feedback.empty());
+    CHECK (! output.quit);
+
+    output = session.handleLine ("Cmaj7");
+    CHECK (output.report.find ("Cmaj7") != std::string::npos);
+    CHECK (output.feedback.empty());
+    CHECK (session.lastValidText() == std::optional<std::string> { "Cmaj7" });
+
+    output = session.handleLine (":key A");
+    CHECK (output.report.empty());
+    CHECK (output.feedback.find ("Key: A major") != std::string::npos);
+    CHECK (session.settings().keyName() == "A");
+
+    session.handleLine (":mode minor");
+    output = session.handleLine ("i-iv-V");
+    CHECK (output.report.find ("Am") != std::string::npos);
+    CHECK (output.report.find ("Dm") != std::string::npos);
+    CHECK (output.report.find ("G# B E") != std::string::npos);
+
+    output = session.handleLine (":velocity 0");
+    CHECK (output.feedback.find ("Error") != std::string::npos);
+    CHECK (session.settings().velocity == 100);
+
+    output = session.handleLine (":nope");
+    CHECK (output.feedback.find ("Unknown command") != std::string::npos);
+
+    output = session.handleLine (":help");
+    CHECK (output.feedback.find (":key") != std::string::npos);
+    CHECK (output.feedback.find (":export") != std::string::npos);
+
+    session.handleLine (":json on");
+    output = session.handleLine ("Cmaj7");
+    CHECK (output.report.front() == '{');
+    CHECK (output.report.find ("\"valid\": true") != std::string::npos);
+    session.handleLine (":json off");
+
+    output = session.handleLine (":q");
+    CHECK (output.quit);
+
+    const auto temp = std::filesystem::temp_directory_path()
+                          / "chordtext-cli-session-test";
+    std::filesystem::remove_all (temp);
+    std::filesystem::create_directories (temp);
+
+    CliSession exporter;
+    output = exporter.handleLine (":export " + (temp / "nothing").string());
+    CHECK (output.feedback.find ("Nothing to export") != std::string::npos);
+    CHECK (! std::filesystem::exists (temp / "nothing.mid"));
+
+    exporter.handleLine ("Cmaj7");
+    output = exporter.handleLine (":export " + (temp / "loop").string());
+    CHECK (output.feedback.find ("Wrote") != std::string::npos);
+    CHECK (std::filesystem::exists (temp / "loop.mid"));
+    std::filesystem::remove (temp / "loop.mid");
+
+    output = exporter.handleLine ("C99");
+    CHECK (output.report.find ("Error at character") != std::string::npos);
+    CHECK (exporter.lastValidText() == std::optional<std::string> { "Cmaj7" });
+    output = exporter.handleLine (":export " + (temp / "last").string());
+    CHECK (std::filesystem::exists (temp / "last.mid"));
+    std::filesystem::remove (temp / "last.mid");
+
+    output = exporter.handleLine (":export " + (temp / "out file").string());
+    CHECK (output.feedback.find ("Wrote") != std::string::npos);
+    CHECK (std::filesystem::exists (temp / "out file.mid"));
+    std::filesystem::remove (temp / "out file.mid");
+
+    CliSession emptySession;
+    emptySession.handleLine (",");
+    output = emptySession.handleLine (":export " + (temp / "empty").string());
+    CHECK (output.feedback.find ("Cannot write MIDI for an empty progression")
+           != std::string::npos);
+    CHECK (! std::filesystem::exists (temp / "empty.mid"));
+
+    const auto blocker = temp / "blocker";
+    {
+        std::ofstream blockerFile (blocker);
+        blockerFile << "x";
+    }
+    CliSession failing;
+    failing.handleLine ("C");
+    output = failing.handleLine (":export " + (blocker / "out").string());
+    CHECK (output.feedback.find ("Error") != std::string::npos);
+    CHECK (! std::filesystem::exists (blocker / "out.mid"));
+
+    std::filesystem::remove_all (temp);
 
     return reportAndExit();
 }
