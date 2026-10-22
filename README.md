@@ -559,7 +559,7 @@ Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100
 Chord  Degree  Notes    Beats  MIDI
 Cmaj7  Imaj7   C E G B  4      48 52 55 59
 chord> :key A
-Key: A minor · Voicing: voice-led · Range: C3-C6 · Velocity: 100
+Key: A major · Voicing: voice-led · Range: C3-C6 · Velocity: 100
 chord> :quit
 ```
 
@@ -700,6 +700,10 @@ newline:
 }
 ```
 
+This example was generated with `--voicing root-position --range C2-C5`; the default
+settings produce `voice-led` and `C3-C6` (and the corresponding `voicing` numbers)
+instead.
+
 Field meanings:
 
 - `settings` holds the effective settings as canonical strings (`key` as written in
@@ -711,7 +715,8 @@ Field meanings:
 - `spelledTones` is the chord's tones in quality order, independent of voicing.
 - `notes` is the voiced spelling, one entry per `voicing` value, matching the human
   table's `Notes` column.
-- `voicing` is the same chord as space-separated MIDI note numbers.
+- `voicing` is an array of integers identical in value to the human table's
+  space-separated `MIDI` column.
 - `startBeat` is cumulative across chords.
 - `midiFile` is an absolute path string after a successful write, otherwise `null`.
 - `error` is a string for a file I/O or empty-export failure, otherwise `null`.
