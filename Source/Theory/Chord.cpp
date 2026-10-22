@@ -225,4 +225,33 @@ std::string degreeLabel (const Chord& chord, const Key& key)
 
     return result;
 }
+
+std::string noteNameForPitch (const Chord& chord, int midi)
+{
+    const auto pitchClass = ((midi % 12) + 12) % 12;
+
+    for (const auto& tone : chord.tones())
+        if (((tone.semitone() % 12) + 12) % 12 == pitchClass)
+            return tone.name();
+
+    static constexpr std::array<const char*, 12> fallbackNames
+        {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+
+    return fallbackNames[static_cast<std::size_t> (pitchClass)];
+}
+
+std::string notesForVoicing (const Chord& chord, const std::vector<int>& voicing)
+{
+    std::string result;
+
+    for (const auto pitch : voicing)
+    {
+        if (! result.empty())
+            result += ' ';
+
+        result += noteNameForPitch (chord, pitch);
+    }
+
+    return result;
+}
 }

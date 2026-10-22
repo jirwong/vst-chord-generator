@@ -1,7 +1,9 @@
 #include "PluginProcessor.h"
 
 #include "PluginEditor.h"
+#include "Theory/Chord.h"
 #include "Theory/Key.h"
+#include "Theory/MidiFileWriter.h"
 #include "Theory/Progression.h"
 #include "Theory/Voicer.h"
 
@@ -9,6 +11,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <utility>
@@ -85,34 +88,6 @@ chordtext::PitchClass pitchClassFromName (const char* name)
         alteration = -1;
 
     return { text[0], alteration };
-}
-
-std::string noteNameForPitch (const chordtext::Chord& chord, int midi)
-{
-    const auto pitchClass = ((midi % 12) + 12) % 12;
-
-    for (const auto& tone : chord.tones())
-    {
-        if (((tone.semitone() % 12) + 12) % 12 == pitchClass)
-            return tone.name();
-    }
-
-    return juce::MidiMessage::getMidiNoteName (midi, true, false, 3).toStdString();
-}
-
-std::string notesForVoicing (const chordtext::Chord& chord, const std::vector<int>& voicing)
-{
-    std::string result;
-
-    for (const auto pitch : voicing)
-    {
-        if (! result.empty())
-            result += ' ';
-
-        result += noteNameForPitch (chord, pitch);
-    }
-
-    return result;
 }
 } // namespace
 
@@ -267,7 +242,7 @@ void ChordTextAudioProcessor::rebuildPlan()
         LearningRow row;
         row.chord = step.chord.symbol();
         row.degree = chordtext::degreeLabel (step.chord, key);
-        row.notes = notesForVoicing (step.chord, voicings[index]);
+        row.notes = chordtext::notesForVoicing (step.chord, voicings[index]);
         row.durationBeats = step.durationBeats;
         learningRows.push_back (std::move (row));
     }
@@ -307,69 +282,19 @@ bool ChordTextAudioProcessor::writeMidiFile (const juce::File& file, MidiFileMod
         return false;
     }
 
-    constexpr double ticksPerQuarterNote = 960.0;
+    chordtext::MidiFileSettings settings;
+    const auto cachedBpm = lastHostBpm.load (std::memory_order_relaxed);
+    settings.bpm = cachedBpm > 0.0 && std::isfinite (cachedBpm) ? cachedBpm : 120.0;
+    settings.includeTempoAndTimeSignature = mode == MidiFileMode::exportFile;
 
-    juce::MidiFile midiFile;
-    midiFile.setTicksPerQuarterNote (static_cast<int> (ticksPerQuarterNote));
-
-    juce::MidiMessageSequence sequence;
-    sequence.addEvent (juce::MidiMessage::textMetaEvent (3, "Chord Text"), 0.0);
-
-    // Drag clips inherit the host project tempo, so they must not carry a
-    // tempo or time-signature event. Only a standalone export is self-contained.
-    if (mode == MidiFileMode::exportFile)
+    std::string error;
+    if (! chordtext::writeMidiFile (
+            exportPlan,
+            std::filesystem::u8path (file.getFullPathName().toStdString()),
+            settings,
+            error))
     {
-        // getPlayHead()->getPosition() is only valid during processBlock. Use the
-        // tempo cached by the audio thread, and fall back to 120 BPM until a block
-        // has supplied a usable tempo.
-        const auto cachedBpm = lastHostBpm.load (std::memory_order_relaxed);
-        const auto bpm = cachedBpm > 0.0 && std::isfinite (cachedBpm) ? cachedBpm : 120.0;
-
-        sequence.addEvent (juce::MidiMessage::tempoMetaEvent (
-                               static_cast<int> (std::lround (60000000.0 / bpm))),
-                           0.0);
-        sequence.addEvent (juce::MidiMessage::timeSignatureMetaEvent (4, 4), 0.0);
-    }
-
-    auto events = exportPlan.events;
-    std::stable_sort (events.begin(), events.end(),
-                      [] (const chordtext::MidiEvent& left, const chordtext::MidiEvent& right)
-                      {
-                          if (left.beat != right.beat)
-                              return left.beat < right.beat;
-
-                          if (left.noteOn != right.noteOn)
-                              return ! left.noteOn;
-
-                          return left.pitch < right.pitch;
-                      });
-
-    for (const auto& event : events)
-    {
-        const auto tick = static_cast<double> (
-            std::llround (event.beat * ticksPerQuarterNote));
-        const auto message = event.noteOn
-            ? juce::MidiMessage::noteOn (event.channel, event.pitch,
-                                         static_cast<juce::uint8> (event.velocity))
-            : juce::MidiMessage::noteOff (event.channel, event.pitch,
-                                          static_cast<juce::uint8> (0));
-
-        sequence.addEvent (message, tick);
-    }
-
-    midiFile.addTrack (sequence);
-
-    juce::FileOutputStream output (file);
-
-    if (! output.openedOk())
-    {
-        errorMessage = "Cannot open " + file.getFullPathName() + " for writing.";
-        return false;
-    }
-
-    if (! midiFile.writeTo (output))
-    {
-        errorMessage = "Cannot write the MIDI file " + file.getFullPathName() + ".";
+        errorMessage = juce::String::fromUTF8 (error.c_str());
         return false;
     }
 

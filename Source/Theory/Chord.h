@@ -34,4 +34,6 @@ private:
 };
 
 std::string degreeLabel (const Chord& chord, const Key& key);
+std::string noteNameForPitch (const Chord& chord, int midi);
+std::string notesForVoicing (const Chord& chord, const std::vector<int>& voicing);
 }
