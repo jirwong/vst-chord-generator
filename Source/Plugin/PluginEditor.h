@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ClipDragComponent.h"
 #include "PluginProcessor.h"
 
 #include <memory>
@@ -38,7 +39,7 @@ private:
     };
 
     void timerCallback() override;
-    void applyProgressionText();
+    void applyProgressionText (bool force);
     void startExport();
     void refreshStatus();
 
@@ -61,6 +62,9 @@ private:
     juce::Slider velocitySlider;
     juce::ToggleButton loopButton { "Loop" };
     juce::TextButton exportButton { "Export .mid" };
+    juce::TextButton regenerateButton { "Regenerate" };
+    juce::TextButton revealClipButton { "Reveal last clip" };
+    ClipDragComponent clipDrag;
     juce::Label statusLabel;
     juce::TextEditor diagnosticsDisplay;
     LearningTableModel tableModel;
@@ -84,6 +88,8 @@ private:
     juce::String lastExportStatus;
     juce::String lastStatusText;
     juce::String lastDiagnosticsText;
+    juce::String lastRevealPath;
+    bool lastRevealAvailable = false;
     bool textEditPending = false;
     double lastTextEditMs = 0.0;
 

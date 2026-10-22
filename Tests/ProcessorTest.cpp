@@ -1,4 +1,5 @@
 #include "Check.h"
+#include "Plugin/ClipDragComponent.h"
 #include "Plugin/PluginProcessor.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -336,9 +337,14 @@ int main()
         p.rebuildPlan();
         p.prepareToPlay (48000.0, 512);
 
-        CHECK (p.getLearningRows().size() == 2);
-        CHECK (p.getLearningRows()[0].chord == "Am");
-        CHECK (p.getLearningRows()[1].chord == "E");
+        const auto rows = p.getLearningRows();
+        CHECK (rows.size() == 2);
+
+        if (rows.size() >= 2)
+        {
+            CHECK (rows[0].chord == "Am");
+            CHECK (rows[1].chord == "E");
+        }
 
         juce::AudioBuffer<float> audio (2, 512);
         juce::MidiBuffer midi;
@@ -381,8 +387,12 @@ int main()
         ChordTextAudioProcessor b;
         b.setStateInformation (state.getData(), (int) state.getSize());
         CHECK (b.getProgressionText() == "i, V");
-        CHECK (b.getLearningRows().size() == 2);
-        CHECK (b.getLearningRows()[0].chord == "Am");
+        const auto restoredRows = b.getLearningRows();
+        CHECK (restoredRows.size() == 2);
+
+        if (restoredRows.size() >= 2)
+            CHECK (restoredRows[0].chord == "Am");
+
         CHECK (choiceIndex (b, "key") == 13);
         CHECK (choiceIndex (b, "mode") == 1);
     }
@@ -657,7 +667,7 @@ int main()
         CHECK (midiFile.getTimeFormat() == 960);
         CHECK (midiFile.getNumTracks() >= 1);
 
-        int noteOns = 0, noteOffs = 0, tempoEvents = 0;
+        int noteOns = 0, noteOffs = 0, tempoEvents = 0, timeSignatureEvents = 0;
         std::vector<double> noteOnTicks;
         for (int t = 0; t < midiFile.getNumTracks(); ++t)
         {
@@ -677,17 +687,23 @@ int main()
                     ++tempoEvents;
                     CHECK_NEAR (message.getTempoSecondsPerQuarterNote(), 0.5, 0.001);
                 }
+                if (message.isTimeSignatureMetaEvent()) ++timeSignatureEvents;
             }
         }
 
         CHECK (noteOns == 8);
         CHECK (noteOffs == 8);
         CHECK (tempoEvents >= 1);
+        CHECK (timeSignatureEvents >= 1);
         CHECK (noteOnTicks.size() == 8);
-        for (int i = 0; i < 4; ++i)
-            CHECK (noteOnTicks[(size_t) i] == 0.0);
-        for (int i = 4; i < 8; ++i)
-            CHECK (noteOnTicks[(size_t) i] == 4.0 * 960.0);
+
+        if (noteOnTicks.size() >= 8)
+        {
+            for (int i = 0; i < 4; ++i)
+                CHECK (noteOnTicks[(size_t) i] == 0.0);
+            for (int i = 4; i < 8; ++i)
+                CHECK (noteOnTicks[(size_t) i] == 4.0 * 960.0);
+        }
 
         file.deleteFile();
     }
@@ -768,7 +784,350 @@ int main()
         if (editor != nullptr)
         {
             CHECK (editor->getWidth() == 760);
-            CHECK (editor->getHeight() == 560);
+            CHECK (editor->getHeight() == 640);
+        }
+    }
+
+    // learning rows carry the effective duration in beats
+    {
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("Cmaj7:2, G7");
+        const auto rows = p.getLearningRows();
+        CHECK (rows.size() == 2);
+
+        if (rows.size() >= 2)
+        {
+            CHECK_NEAR (rows[0].durationBeats, 2.0, 1e-9);
+            CHECK_NEAR (rows[1].durationBeats, 4.0, 1e-9);
+        }
+    }
+
+    // editor exposes the new controls and can force a rebuild
+    {
+        ChordTextAudioProcessor p;
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        CHECK (editor != nullptr);
+        CHECK (editor->getWidth() == 760);
+        CHECK (editor->getHeight() == 640);
+
+        auto* progression = dynamic_cast<juce::TextEditor*> (
+            editor->findChildWithID ("progressionEditor"));
+        auto* regenerate = dynamic_cast<juce::TextButton*> (
+            editor->findChildWithID ("regenerateButton"));
+        CHECK (progression != nullptr);
+        CHECK (regenerate != nullptr);
+
+        if (progression != nullptr && regenerate != nullptr)
+        {
+            progression->setText ("C", juce::dontSendNotification);
+            regenerate->triggerClick();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+
+            const auto rows = p.getLearningRows();
+            CHECK (rows.size() == 1);
+
+            if (rows.size() >= 1)
+                CHECK (rows[0].chord == "C");
+
+            progression->setText ("H", juce::dontSendNotification);
+            regenerate->triggerClick();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+            CHECK (p.getLearningRows().size() == 1);
+            CHECK (! p.getDiagnostics().empty());
+        }
+    }
+
+    // the learning table exposes the Beats column
+    {
+        ChordTextAudioProcessor p;
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        CHECK (editor != nullptr);
+
+        auto* table = dynamic_cast<juce::TableListBox*> (
+            editor->findChildWithID ("learningTable"));
+        CHECK (table != nullptr);
+
+        if (table != nullptr)
+        {
+            CHECK (table->getHeader().getNumColumns (true) == 4);
+            CHECK (table->getHeader().getColumnName (4) == "Beats");
+        }
+    }
+
+    // auto-parse applies an editor edit after the debounce
+    {
+        ChordTextAudioProcessor p;
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        CHECK (editor != nullptr);
+
+        auto* progression = dynamic_cast<juce::TextEditor*> (
+            editor->findChildWithID ("progressionEditor"));
+        CHECK (progression != nullptr);
+
+        if (progression != nullptr)
+        {
+            // sendNotification arms the editor's debounce; the timer must apply
+            // the new text without a Regenerate click.
+            progression->setText ("Am7, Dm7", true);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+
+            const auto rows = p.getLearningRows();
+            CHECK (rows.size() == 2);
+
+            if (rows.size() >= 2)
+            {
+                CHECK (rows[0].chord == "Am7");
+                CHECK (rows[1].chord == "Dm7");
+            }
+        }
+    }
+
+    // Regenerate with unchanged text responds to a parameter change
+    {
+        ChordTextAudioProcessor p;
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        CHECK (editor != nullptr);
+
+        auto* progression = dynamic_cast<juce::TextEditor*> (
+            editor->findChildWithID ("progressionEditor"));
+        auto* regenerate = dynamic_cast<juce::TextButton*> (
+            editor->findChildWithID ("regenerateButton"));
+        CHECK (progression != nullptr);
+        CHECK (regenerate != nullptr);
+
+        if (progression != nullptr && regenerate != nullptr)
+        {
+            progression->setText ("I, V", true);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+
+            auto rows = p.getLearningRows();
+            CHECK (rows.size() == 2);
+
+            if (rows.size() >= 2)
+            {
+                CHECK (rows[0].chord == "C");
+                CHECK (rows[1].chord == "G");
+            }
+
+            // The key listener also posts an asynchronous rebuild, so this
+            // verifies that Regenerate still runs cleanly and leaves rows that
+            // reflect the new key; it does not isolate the rebuild to the click.
+            p.apvts.getParameter ("key")->setValueNotifyingHost (3.0f / 16.0f); // D
+            regenerate->triggerClick();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+
+            rows = p.getLearningRows();
+            CHECK (rows.size() == 2);
+
+            if (rows.size() >= 2)
+            {
+                CHECK (rows[0].chord == "D");
+                CHECK (rows[1].chord == "A");
+            }
+
+            CHECK (p.getDiagnostics().empty());
+            CHECK (p.getProgressionText() == "I, V");
+        }
+    }
+
+    // drag clip is one loop, with no tempo or time-signature metadata
+    {
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("Cmaj7:2, G7:2");
+
+        juce::String error;
+        const auto file = p.createDragClipFile (error);
+        CHECK (error.isEmpty());
+        CHECK (file.existsAsFile());
+        CHECK (p.getLastDragClipFile() == file);
+        CHECK (file.getParentDirectory().getFileName() == "Clips");
+        CHECK (file.getParentDirectory().getParentDirectory().getFileName() == "ChordText");
+        CHECK (file.getFileName().startsWith ("ChordText-"));
+
+        juce::FileInputStream in (file);
+        CHECK (in.openedOk());
+        juce::MidiFile midiFile;
+        CHECK (midiFile.readFrom (in));
+
+        int noteOns = 0, noteOffs = 0, tempoEvents = 0, timeSignatureEvents = 0;
+        std::vector<double> noteOnTicks;
+        std::vector<double> noteOffTicks;
+
+        for (int t = 0; t < midiFile.getNumTracks(); ++t)
+        {
+            const auto* track = midiFile.getTrack (t);
+            for (int i = 0; i < track->getNumEvents(); ++i)
+            {
+                const auto* event = track->getEventPointer (i);
+                const auto message = event->message;
+
+                if (message.isNoteOn())
+                {
+                    ++noteOns;
+                    noteOnTicks.push_back (event->message.getTimeStamp());
+                    CHECK (message.getChannel() == 1);
+                }
+                if (message.isNoteOff())
+                {
+                    ++noteOffs;
+                    noteOffTicks.push_back (event->message.getTimeStamp());
+                }
+                if (message.isTempoMetaEvent()) ++tempoEvents;
+                if (message.isTimeSignatureMetaEvent()) ++timeSignatureEvents;
+            }
+        }
+
+        CHECK (noteOns == 8);
+        CHECK (noteOffs == 8);
+        CHECK (tempoEvents == 0);
+        CHECK (timeSignatureEvents == 0);
+        CHECK (noteOnTicks.size() == 8);
+        CHECK (noteOffTicks.size() == 8);
+
+        if (noteOnTicks.size() >= 8 && noteOffTicks.size() >= 8)
+        {
+            for (int i = 0; i < 4; ++i)
+                CHECK (noteOnTicks[(size_t) i] == 0.0);
+            for (int i = 4; i < 8; ++i)
+                CHECK (noteOnTicks[(size_t) i] == 2.0 * 960.0);
+            for (int i = 0; i < 4; ++i)
+                CHECK (noteOffTicks[(size_t) i] == 2.0 * 960.0);
+            for (int i = 4; i < 8; ++i)
+                CHECK (noteOffTicks[(size_t) i] == 4.0 * 960.0);
+        }
+
+        file.deleteFile();
+    }
+
+    // invalid text produces no drag file
+    {
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("H");
+        juce::String error;
+        const auto file = p.createDragClipFile (error);
+        CHECK (! file.existsAsFile());
+        CHECK (error.isNotEmpty());
+    }
+
+    // a failed drag attempt keeps the last successful clip
+    {
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("C");
+        juce::String error;
+        const auto file = p.createDragClipFile (error);
+        CHECK (file.existsAsFile());
+        CHECK (p.getLastDragClipFile() == file);
+
+        p.setProgressionText ("H");
+        const auto failed = p.createDragClipFile (error);
+        CHECK (! failed.existsAsFile());
+        CHECK (p.getLastDragClipFile() == file);
+
+        file.deleteFile();
+    }
+
+    // clip preview follows the timer-driven refresh path
+    {
+        ChordTextAudioProcessor p;
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        CHECK (editor != nullptr);
+
+        auto* clip = dynamic_cast<ClipDragComponent*> (
+            editor->findChildWithID ("clipDrag"));
+        auto* progression = dynamic_cast<juce::TextEditor*> (
+            editor->findChildWithID ("progressionEditor"));
+        auto* regenerate = dynamic_cast<juce::TextButton*> (
+            editor->findChildWithID ("regenerateButton"));
+        CHECK (clip != nullptr);
+        CHECK (progression != nullptr);
+        CHECK (regenerate != nullptr);
+
+        if (clip != nullptr && progression != nullptr && regenerate != nullptr)
+        {
+            // The default progression is valid, so the preview is enabled.
+            CHECK (clip->isEnabled());
+
+            progression->setText ("", juce::dontSendNotification);
+            regenerate->triggerClick();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+            CHECK (! clip->isEnabled());
+
+            progression->setText ("C", juce::dontSendNotification);
+            regenerate->triggerClick();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+            CHECK (clip->isEnabled());
+
+            progression->setText ("H", juce::dontSendNotification);
+            regenerate->triggerClick();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+            CHECK (! clip->isEnabled());
+            CHECK (! p.getDiagnostics().empty());
+        }
+    }
+
+    // clip preview creates a file, enables Reveal, and rejects invalid text
+    {
+        ChordTextAudioProcessor p;
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        CHECK (editor != nullptr);
+
+        auto* clip = dynamic_cast<ClipDragComponent*> (
+            editor->findChildWithID ("clipDrag"));
+        auto* reveal = dynamic_cast<juce::TextButton*> (
+            editor->findChildWithID ("revealClip"));
+        auto* progression = dynamic_cast<juce::TextEditor*> (
+            editor->findChildWithID ("progressionEditor"));
+        CHECK (clip != nullptr);
+        CHECK (reveal != nullptr);
+        CHECK (progression != nullptr);
+
+        if (clip != nullptr && reveal != nullptr && progression != nullptr)
+        {
+            CHECK (! reveal->isEnabled());
+
+            const auto file = clip->createClipFile();
+            CHECK (file.existsAsFile());
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+            CHECK (reveal->isEnabled());
+            file.deleteFile();
+
+            progression->setText ("H", juce::dontSendNotification);
+            const auto invalidFile = clip->createClipFile();
+            CHECK (invalidFile == juce::File());
+            CHECK (! p.getDiagnostics().empty());
+        }
+
+        // Only the left mouse button may start a drag.
+        if (clip != nullptr)
+        {
+            int createCalls = 0;
+            clip->createClipFile = [&createCalls]
+            {
+                ++createCalls;
+                return juce::File();
+            };
+            clip->setLoopInfo (16.0, true);
+
+            const auto makeEvent = [clip] (juce::ModifierKeys modifiers,
+                                            juce::Point<float> position)
+            {
+                return juce::MouseEvent (
+                    juce::Desktop::getInstance().getMainMouseSource(),
+                    position, modifiers, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                    clip, clip, juce::Time::getCurrentTime(),
+                    juce::Point<float> (0.0f, 0.0f), juce::Time::getCurrentTime(),
+                    1, true);
+            };
+
+            clip->mouseDown (makeEvent (juce::ModifierKeys::leftButtonModifier,
+                                        juce::Point<float> (0.0f, 0.0f)));
+            clip->mouseDrag (makeEvent (juce::ModifierKeys::rightButtonModifier,
+                                        juce::Point<float> (20.0f, 20.0f)));
+            CHECK (createCalls == 0);
+
+            clip->mouseDrag (makeEvent (juce::ModifierKeys::leftButtonModifier,
+                                        juce::Point<float> (20.0f, 20.0f)));
+            CHECK (createCalls == 1);
         }
     }
 

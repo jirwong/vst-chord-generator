@@ -2,8 +2,9 @@
 
 Chord Text is a Windows x64 VST3 MIDI generator. Type a chord progression as chord
 symbols or Roman numerals, and the plugin plays it in sync with the host transport
-or exports it as a Standard MIDI File. The editor also shows a learning table with
-each chord's functional degree and spelled chord tones.
+or exports it as a Standard MIDI File. You can also drag one loop from the editor
+into a DAW such as Bitwig as a MIDI clip. The editor shows a learning table with
+each chord's functional degree, spelled chord tones, and duration in beats.
 
 The plugin produces MIDI only. It has no audio output and no built-in synth, so it
 must be routed to an instrument in the host.
@@ -126,11 +127,12 @@ part of the manual checklist below and has **not** been verified in this environ
 2. Press Play in the DAW. The default progression
    `Cmaj7, Am7, Dm7, G7` plays, one chord per 4/4 bar, and loops.
 3. Type a progression in the text box. Parsing is debounced by 150 ms, so playback
-   updates shortly after typing stops.
+   updates shortly after typing stops. Press **Regenerate** to apply the current
+   text immediately.
 4. Use the key, mode, voicing, range, velocity, and loop controls to shape the
    output.
-5. Read the learning table for each chord's degree and spelled notes, then export a
-   `.mid` file if desired.
+5. Read the learning table for each chord's degree, spelled notes, and duration,
+   then drag the clip preview into the DAW or export a `.mid` file if desired.
 
 Live generation requires host playhead data with a PPQ position and tempo. The
 status line reports `Transport ready` while the transport plays, `Transport
@@ -147,6 +149,22 @@ release active notes before new ones are emitted. When the host calls
 note-offs are emitted at sample 0 of the next block before any new events.
 `releaseResources` cannot emit MIDI, so it only clears internal note tracking; the
 host is expected to flush sounding notes when it releases the plugin.
+
+## Regenerate and automatic parsing
+
+**Regenerate** sits on the progression header row. Clicking it cancels any pending
+debounce, parses the text in the editor immediately, and rebuilds the playback plan
+and learning table from the current text and settings. It forces a rebuild even when
+the text is unchanged.
+
+Automatic parsing remains enabled: the text is still parsed 150 ms after the last
+edit. Regenerate is an explicit alternative to waiting for that timer, not a
+replacement for it.
+
+If the text is invalid, Regenerate does not replace the last valid plan or table
+rows. The existing progression keeps playing and the diagnostics area shows the
+errors. An empty progression is valid; Regenerate then produces an empty table and
+disables export and dragging.
 
 ## Syntax reference
 
@@ -319,19 +337,24 @@ A#, Bb, and B, in major or minor.
 
 The table shows the last valid progression:
 
-| Chord | Degree | Notes |
-|---|---|---|
-| Cmaj7 | Imaj7 | C E G B |
-| Am7 | vi7 | A C E G |
-| Dm7 | ii7 | D F A C |
-| G7 | V7 | G B D F |
+| Chord | Degree | Notes | Beats |
+|---|---|---|---|
+| Cmaj7 | Imaj7 | C E G B | 4 |
+| Am7 | vi7 | A C E G | 4 |
+| Dm7 | ii7 | D F A C | 4 |
+| G7 | V7 | G B D F | 4 |
 
-The Notes column follows the current voicing and range and uses each chord's spelled
-tones, so Roman numerals inherit the key's spelling. The Degree column is a
-normalized functional label; absolute chords are labeled best-effort relative to the
-selected key using the root letter and accidental (not by nearest pitch class).
-Chromatic or ambiguous roots use a best-effort `b`/`#` label. The row for the
-currently playing chord is highlighted during playback.
+The Beats column is the chord's effective duration, including the default of 4
+beats when the input has no `:N` suffix. It is displayed as a compact number, so a
+chord written as `Am7:1.5` shows `1.5`, not `1.5 beats`. The Notes column follows
+the current voicing and range and uses each chord's spelled tones, so Roman
+numerals inherit the key's spelling. The Degree column is a normalized functional
+label; absolute chords are labeled best-effort relative to the selected key using
+the root letter and accidental (not by nearest pitch class). Chromatic or ambiguous
+roots use a best-effort `b`/`#` label. The row for the currently playing chord is
+highlighted during playback.
+
+The table continues to show the last valid progression while the text is invalid.
 
 ### Errors and diagnostics
 
@@ -352,12 +375,15 @@ present.
 | Control | Default | Notes |
 |---|---|---|
 | Progression text | `Cmaj7, Am7, Dm7, G7` | Multi-line, parsed 150 ms after the last edit |
+| Regenerate | — | Parses the current text and rebuilds immediately |
 | Key | C | 17 tonic spellings |
 | Mode | Major | Major or minor |
 | Voicing | Voice-led | Voice-led or Root position |
 | Range | C3–C6 | C2–C5, C3–C6, or C4–C7 |
 | Velocity | 100 | 1–127 |
 | Loop | On | On or off |
+| Drag to DAW | — | Drags one loop as a `.mid` file; enabled for valid, non-empty progressions |
+| Reveal last clip | — | Opens Explorer at the last drag file; enabled after a drag in this session |
 
 All notes are sent on MIDI channel 1. Root-position voicing places the root at the
 lowest octave that fits the range and stacks the remaining tones above it. Voice-led
@@ -377,8 +403,10 @@ to the message queue.
 
 ## MIDI export
 
-Click **Export .mid** to write one complete loop of the current progression. The
-writer uses the same render plan as live playback:
+Click **Export .mid** to write one complete loop of the current progression. Export
+is separate from dragging; unlike a drag file, an exported file always includes the
+tempo and 4/4 time-signature metadata. The writer uses the same render plan as live
+playback:
 
 - the last host tempo observed during processing, or 120 BPM before any tempo has
   been observed;
@@ -398,12 +426,80 @@ while a file chooser is already open. Export runs on the message thread and appe
 `.mid` if the chosen filename lacks it. The status line reports the file name or the
 failure reason.
 
+Export retains the tempo event (the last observed host tempo, or 120 BPM) and the
+4/4 time signature; only the drag path omits them.
+
+## Dragging clips into a DAW
+
+The editor contains a clip-shaped **Drag to DAW** preview. It shows the loop length,
+for example `16 beats · 4 bars (4/4)`, computed as the sum of the chord durations.
+A left-button drag starts only after a small mouse movement, so a click does not
+create a file.
+
+The preview is enabled after the last successful parse, when that plan contains at
+least one note. While a debounced edit is pending it reflects the last parsed text,
+not the characters just typed. An empty progression also disables the preview.
+While it is disabled it shows `Fix errors to drag`, or
+`Enter a progression to drag` when the progression is empty. Starting a drag forces
+a parse of the current text first, using the same path as Regenerate. If parsing
+fails, no file is created and the diagnostics are shown.
+
+A drag writes exactly one loop cycle at the current key, mode, voicing, range, and
+velocity settings. The file uses the same notes, 960 ticks per quarter note, MIDI
+channel 1, track name `Chord Text`, and note-off-before-note-on ordering as live
+playback and export. It deliberately contains **no tempo meta event and no
+time-signature meta event**, so the DAW's project tempo and meter govern the clip.
+If the host instead assumes 120 BPM, that is a host-behaviour risk noted below.
+
+### File location and lifetime
+
+Drag files are written to:
+
+```text
+Documents\ChordText\Clips
+```
+
+The folder is created if missing. Each file is named
+`ChordText-YYYYMMDD-HHMMSS.mid` using local time, so repeated drags do not
+overwrite earlier clips. If two drags happen in the same second, a numeric suffix is
+added to the timestamped name instead of overwriting the existing file. Files are
+never deleted automatically in v1: a clip may already be referenced by a saved DAW
+project, and removing its source would break that project.
+
+### Fallback: Reveal last clip
+
+Every started drag leaves a real file in the clips folder, whether or not the DAW
+accepts the drop. The plugin cannot detect whether the drop succeeded, so the status
+line reports the saved filename and that the drag was requested, for example
+`Clip saved: ChordText-20261022-143015.mid; drag requested.` If the drag could not be
+queued, it reports
+`Clip saved: ChordText-20261022-143015.mid; drag could not be queued.` Neither
+message claims that the DAW accepted the drop.
+
+**Reveal last clip** sits next to **Export .mid**. It is enabled once a drag file has
+been created in the current plugin session and opens Explorer with that file
+selected. The last drag path is session-only and is not saved with the project, so
+Reveal starts disabled after reloading even if earlier clip files still exist in the
+folder. If Bitwig ignores the external drag, click Reveal last clip and drag the file
+from Explorer into Bitwig.
+
+### Bitwig notes
+
+Bitwig receives the plugin as a VST3 MIDI generator; load the plugin, then route
+its MIDI output to an instrument as usual. The drag writes a file and starts an
+operating-system file drag. It does not create a Bitwig clip through a native API,
+because a VST3 plugin has no such API and Bitwig does not expose one for this
+workflow. The resulting clip should follow the Bitwig project tempo because the file
+has no tempo event. This behaviour is host-dependent and has not been verified here;
+use the checklist below.
+
 ## Tests
 
 `Tests/TheoryTest.cpp` is plain C++ with no JUCE dependency and covers parsing,
 spelling, keys, voicing, and the render plan. `Tests/ProcessorTest.cpp` is a JUCE
 console application covering transport behaviour, note lifecycle, parameters, state
-round-trip, the editor, and MIDI export/read-back.
+round-trip, the editor, Regenerate, the Beats column, the drag-file writer and its
+two modes, and MIDI export/read-back.
 
 Run both suites through a build script:
 
@@ -423,7 +519,7 @@ Or run the already-built executables directly:
 ```
 
 Each executable prints a summary such as `87 checks, 0 failures` for `TheoryTests`
-and `136 checks, 0 failures` for `ProcessorTests`, and returns a non-zero exit code
+and `233 checks, 0 failures` for `ProcessorTests`, and returns a non-zero exit code
 if any check fails. The build scripts stop on the first failing suite. The build must
 produce no warnings from project code under JUCE's recommended warning flags.
 
@@ -460,6 +556,21 @@ Known limitations in v1:
   host providing capacity.
 - Export uses the last tempo observed in `processBlock`. If a project is exported
   before the host has processed a block since loading, the file uses 120 BPM.
+- Bitwig may reject an external file drag from a VST3 plugin window. If the drop is
+  ignored, the file is still saved and **Reveal last clip** provides the fallback.
+  Direct drop acceptance has not been verified in this environment.
+- A drag clip has no tempo event, so Bitwig's project tempo is expected to govern
+  playback. Bitwig may instead assume 120 BPM; this is host-dependent and
+  unverified.
+- Dragging writes a new file on every attempt under `Documents\ChordText\Clips`.
+  Files accumulate, and there is no automatic cleanup in v1.
+- There is no native Bitwig clip-creation API for a VST3 plugin. Chord Text writes
+  a `.mid` file and starts an OS drag; it does not create or edit a Bitwig clip
+  directly.
+- The preview's bar count assumes 4/4 and is informational. The clip itself is
+  beat-based, so a host in another meter can still use it.
+- The editor is a fixed 760×640. The increased height has not been checked in
+  Bitwig's plugin window.
 - Host state restore is assumed to run on the message thread. If a host calls
   `setStateInformation` on another thread, the plugin defers the plan rebuild to
   the message queue, but the host is still responsible for serialising state
@@ -473,14 +584,16 @@ Explicitly out of scope for v1:
 - key changes or modulation, secondary dominants;
 - 11th and 13th chords, `6/9` chords;
 - MPE and MIDI 2.0;
-- drag-out MIDI clips and a piano-roll preview;
+- dragging individual chords or table rows, dragging multiple loop repetitions, and
+  a piano-roll preview;
 - custom UI styling, a built-in synth, and audio output;
 - automated CI.
 
 ## Manual DAW verification checklist
 
-Automated tests cover parsing, voicing, transport, note lifecycle, state, and MIDI
-export. The following host checks require a VST3-compatible DAW and a human at the
+Automated tests cover parsing, voicing, transport, note lifecycle, state, MIDI
+export, Regenerate, the Beats column, the drag-file writer, and the clip-preview
+state. The following host checks require a VST3-compatible DAW and a human at the
 keyboard. They are documented here but were **not** performed as part of this
 repository's automated verification, so they remain unverified until someone runs
 them.
@@ -509,6 +622,18 @@ them.
       the current key and voicing.
 - [ ] Save and reload the project; confirm the text, key, mode, voicing, range,
       velocity, and loop setting restore.
+- [ ] Confirm the Beats column shows `4` for chords without a `:N` suffix and the
+      explicit value for chords with one.
+- [ ] Change the text and press Regenerate; confirm the table updates immediately.
+- [ ] Enter invalid text and press Regenerate; confirm the previous rows and plan
+      stay and diagnostics appear.
+- [ ] In Bitwig, drag the clip preview into the arranger or onto a track.
+- [ ] Confirm a MIDI clip appears with the expected notes and loop length.
+- [ ] Confirm the dragged clip follows the project tempo.
+- [ ] If the drop is ignored, click Reveal last clip and drag the file from
+      Explorer into Bitwig.
+- [ ] Confirm Export `.mid` still works and that the exported file retains tempo
+      and 4/4 metadata.
 
 `pluginval` is optional. If it is installed, run it against the built VST3 and fix
 anything that affects this plugin; it is not required to build or use Chord Text.
@@ -520,7 +645,8 @@ CMakeLists.txt              plugin, test executables, JUCE subdirectory
 README.md                   this document
 build.sh / build.bat        configure/build/test wrappers
 Source/Theory/              JUCE-free notes, keys, chords, parsers, voicing, render plan
-Source/Plugin/              processor (transport, state, export) and editor
+Source/Plugin/              processor (transport, state, export, drag files), editor,
+                            clip drag component
 Tests/                      TheoryTests and ProcessorTests
 docs/superpowers/specs/     design specification
 libs/JUCE/                  pinned JUCE checkout (ignored by Git)
