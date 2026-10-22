@@ -26,6 +26,8 @@ if /I "%~1"=="test" (
     if errorlevel 1 exit /b 1
     .\build\Tests\ProcessorTests.exe
     if errorlevel 1 exit /b 1
+    .\build\Tests\CliTests.exe
+    if errorlevel 1 exit /b 1
     exit /b 0
 )
 

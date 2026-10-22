@@ -25,6 +25,10 @@ set(THEORY_SOURCES
     Source/Theory/Voicer.cpp
     Source/Theory/RenderPlan.cpp
     Source/Theory/MidiFileWriter.cpp)
+set(CLI_CORE_SOURCES
+    Source/Cli/CliSettings.cpp
+    Source/Cli/CliOptions.cpp
+    Source/Cli/CliFile.cpp)
 set(PLUGIN_SOURCES
     Source/Plugin/PluginProcessor.cpp
     Source/Plugin/PluginEditor.cpp
@@ -81,6 +85,19 @@ add_executable(TheoryTests
 target_include_directories(TheoryTests PRIVATE Source)
 target_compile_features(TheoryTests PRIVATE cxx_std_17)
 set_target_properties(TheoryTests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY                 "${CMAKE_BINARY_DIR}/Tests"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG           "${CMAKE_BINARY_DIR}/Tests"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE         "${CMAKE_BINARY_DIR}/Tests"
+    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL      "${CMAKE_BINARY_DIR}/Tests"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO  "${CMAKE_BINARY_DIR}/Tests")
+
+add_executable(CliTests
+    Tests/CliTest.cpp
+    ${CLI_CORE_SOURCES}
+    ${THEORY_SOURCES})
+target_include_directories(CliTests PRIVATE Source)
+target_compile_features(CliTests PRIVATE cxx_std_17)
+set_target_properties(CliTests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY                 "${CMAKE_BINARY_DIR}/Tests"
     RUNTIME_OUTPUT_DIRECTORY_DEBUG           "${CMAKE_BINARY_DIR}/Tests"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE         "${CMAKE_BINARY_DIR}/Tests"
