@@ -1,6 +1,7 @@
 #include "Check.h"
 #include "Cli/CliFile.h"
 #include "Cli/CliOptions.h"
+#include "Cli/CliReport.h"
 #include "Cli/CliSettings.h"
 
 using namespace chordtext;
@@ -105,6 +106,123 @@ int main()
     CHECK (resolveMidiPath ("loop").is_absolute());
     CHECK (resolveMidiPath ("loop.txt").filename().u8string() == "loop.mid");
     CHECK (resolveMidiPath ("loop.MID").filename().u8string() == "loop.MID");
+
+    CliSettings tableSettings;
+    tableSettings.voicing = VoicingMode::rootPosition;
+    tableSettings.rangeIndex = 0;
+
+    const auto report = buildReport ("Cmaj7:2, Am7", tableSettings);
+    CHECK (report.valid);
+    CHECK (report.diagnostics.empty());
+    CHECK (report.chords.size() == 2);
+    CHECK (report.chords[0].source == "Cmaj7");
+    CHECK (report.chords[0].symbol == "Cmaj7");
+    CHECK (report.chords[0].degree == "Imaj7");
+    CHECK ((report.chords[0].spelledTones
+            == std::vector<std::string> { "C", "E", "G", "B" }));
+    CHECK ((report.chords[0].voicing == std::vector<int> { 36, 40, 43, 47 }));
+    CHECK ((report.chords[0].notes
+            == std::vector<std::string> { "C", "E", "G", "B" }));
+    CHECK (report.chords[0].startBeat == 0.0);
+    CHECK (report.chords[0].durationBeats == 2.0);
+    CHECK (report.chords[1].startBeat == 2.0);
+    CHECK (report.chords[1].durationBeats == 4.0);
+    CHECK (report.plan.lengthBeats == 6.0);
+    CHECK (report.plan.events.size() == 16);
+
+    const std::string expectedHuman =
+        "Progression: Cmaj7:2, Am7\n"
+        "Key: C major · Voicing: root-position · Range: C2-C5 · Velocity: 100\n"
+        "\n"
+        "Chord  Degree  Notes    Beats  MIDI\n"
+        "Cmaj7  Imaj7   C E G B  2      36 40 43 47\n"
+        "Am7    vi7     A C E G  4      45 48 52 55\n";
+    CHECK (formatHuman (report) == expectedHuman);
+
+    const auto invalid = buildReport ("C, H, C99", CliSettings {});
+    CHECK (! invalid.valid);
+    CHECK (invalid.diagnostics.size() == 2);
+    const std::string expectedInvalid =
+        "Progression: C, H, C99\n"
+        "Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100\n"
+        "\n"
+        "2 errors:\n"
+        "Error at character 3: unknown chord root (H)\n"
+        "Error at character 6: unknown extension \"9\" (C99)\n";
+    CHECK (formatHuman (invalid) == expectedInvalid);
+
+    const auto empty = buildReport ("   ", CliSettings {});
+    CHECK (empty.valid);
+    CHECK (empty.chords.empty());
+    CHECK (formatHuman (empty).find ("Progression: (empty)\n") == 0);
+    CHECK (formatHuman (empty).find ("Empty progression (no chords).\n")
+           != std::string::npos);
+
+    const auto multiLine = buildReport ("C\n  Am7\tF", CliSettings {});
+    CHECK (formatHuman (multiLine).find ("Progression: C Am7 F\n") == 0);
+
+    const auto dim = buildReport ("C°", CliSettings {});
+    CHECK (dim.valid);
+    CHECK (dim.chords[0].symbol == "Cdim");
+    CHECK (formatJson (dim).find ("\"symbol\": \"Cdim\"") != std::string::npos);
+    const auto halfDim = buildReport ("Cø7", CliSettings {});
+    CHECK (halfDim.valid);
+    CHECK (halfDim.chords[0].symbol == "Cm7b5");
+
+    const auto slash = buildReport ("C/E", CliSettings {});
+    CHECK (slash.valid);
+    CHECK ((slash.chords[0].voicing == std::vector<int> { 52, 60, 64, 67 }));
+    CHECK ((slash.chords[0].notes
+            == std::vector<std::string> { "E", "C", "E", "G" }));
+
+    const auto fractions = buildReport ("Cmaj7:1.5, Am7:0.25, G7:0.3333333333333333",
+                                        CliSettings {});
+    CHECK (fractions.chords[0].durationBeats == 1.5);
+    CHECK (fractions.chords[1].durationBeats == 0.25);
+    const auto fractionsJson = formatJson (fractions);
+    CHECK (fractionsJson.find ("\"durationBeats\": 1.5") != std::string::npos);
+    CHECK (fractionsJson.find ("\"durationBeats\": 0.25") != std::string::npos);
+    CHECK (fractionsJson.find ("\"durationBeats\": 0.3333333333333333")
+           != std::string::npos);
+
+    const auto humanJson = formatJson (report);
+    CHECK (humanJson.find ("\"valid\": true") != std::string::npos);
+    CHECK (humanJson.find ("\"key\": \"C\"") != std::string::npos);
+    CHECK (humanJson.find ("\"voicing\": \"root-position\"") != std::string::npos);
+    CHECK (humanJson.find ("\"range\": \"C2-C5\"") != std::string::npos);
+    CHECK (humanJson.find ("\"velocity\": 100") != std::string::npos);
+    CHECK (humanJson.find ("\"bpm\": 120") != std::string::npos);
+    CHECK (humanJson.find ("\"source\": \"Cmaj7\"") != std::string::npos);
+    CHECK (humanJson.find ("\"spelledTones\": [\"C\", \"E\", \"G\", \"B\"]")
+           != std::string::npos);
+    CHECK (humanJson.find ("\"notes\": [\"C\", \"E\", \"G\", \"B\"]")
+           != std::string::npos);
+    CHECK (humanJson.find ("\"voicing\": [36, 40, 43, 47]") != std::string::npos);
+    CHECK (humanJson.find ("\"startBeat\": 0") != std::string::npos);
+    CHECK (humanJson.find ("\"durationBeats\": 2") != std::string::npos);
+    CHECK (humanJson.find ("\"midiFile\": null") != std::string::npos);
+    CHECK (humanJson.find ("\"error\": null") != std::string::npos);
+    CHECK (humanJson.back() == '\n');
+
+    const auto invalidJson = formatJson (invalid);
+    CHECK (invalidJson.find ("\"valid\": false") != std::string::npos);
+    CHECK (invalidJson.find ("\"chords\": []") != std::string::npos);
+    CHECK (invalidJson.find ("\"offset\": 3") != std::string::npos);
+    CHECK (invalidJson.find ("\"token\": \"H\"") != std::string::npos);
+    CHECK (invalidJson.find ("\"message\": \"unknown chord root\"")
+           != std::string::npos);
+
+    const auto escaped = buildReport (std::string ("a\"b\\c\nd"), CliSettings {});
+    CHECK (formatJson (escaped).find ("\"text\": \"a\\\"b\\\\c\\nd\"")
+           != std::string::npos);
+
+    auto withFile = report;
+    withFile.midiFile = "C:\\tmp\\x.mid";
+    CHECK (formatJson (withFile).find ("\"midiFile\": \"C:\\\\tmp\\\\x.mid\"")
+           != std::string::npos);
+    withFile.error = "bad \"path\"";
+    CHECK (formatJson (withFile).find ("\"error\": \"bad \\\"path\\\"\"")
+           != std::string::npos);
 
     return reportAndExit();
 }

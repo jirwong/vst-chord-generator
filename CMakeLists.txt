@@ -28,7 +28,8 @@ set(THEORY_SOURCES
 set(CLI_CORE_SOURCES
     Source/Cli/CliSettings.cpp
     Source/Cli/CliOptions.cpp
-    Source/Cli/CliFile.cpp)
+    Source/Cli/CliFile.cpp
+    Source/Cli/CliReport.cpp)
 set(PLUGIN_SOURCES
     Source/Plugin/PluginProcessor.cpp
     Source/Plugin/PluginEditor.cpp
