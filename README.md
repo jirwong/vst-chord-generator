@@ -64,7 +64,7 @@ Bash (Git Bash, MSYS2, or WSL with a Windows CMake):
 
 ```bash
 ./build.sh          # configure if needed, then build Release
-./build.sh --test   # build, then run TheoryTests and ProcessorTests
+./build.sh --test   # build, then run TheoryTests, ProcessorTests, and CliTests
 ```
 
 Command Prompt:
@@ -74,7 +74,7 @@ build.bat
 build.bat test
 ```
 
-Both scripts return a non-zero exit code if configuration, the build, or either test
+Both scripts return a non-zero exit code if configuration, the build, or any test
 suite fails.
 
 ### Build outputs
@@ -82,8 +82,9 @@ suite fails.
 - VST3 bundle: `build/ChordText_artefacts/Release/VST3/Chord Text.vst3`
 - Binary inside the bundle:
   `build/ChordText_artefacts/Release/VST3/Chord Text.vst3/Contents/x86_64-win/Chord Text.vst3`
-- Test executables: `build/Tests/TheoryTests.exe` and
-  `build/Tests/ProcessorTests.exe`
+- Command-line utility: `build/Cli/chordtext-cli.exe`
+- Test executables: `build/Tests/TheoryTests.exe`,
+  `build/Tests/ProcessorTests.exe`, and `build/Tests/CliTests.exe`
 
 ## Install and route in a DAW
 
@@ -493,15 +494,268 @@ workflow. The resulting clip should follow the Bitwig project tempo because the 
 has no tempo event. This behaviour is host-dependent and has not been verified here;
 use the checklist below.
 
+## Command-line utility
+
+The build also produces a standalone console program,
+`build/Cli/chordtext-cli.exe`, that parses a progression and reports what the plugin
+would do — without a DAW, a VST3 host, or JUCE. It supports one-shot checks, piped
+stdin, and an interactive REPL, and it can write a Standard MIDI File through the
+same shared writer as the plugin.
+
+```text
+chordtext-cli [options] [progression]
+```
+
+There is at most one positional argument, the progression text. With a progression
+argument the utility runs once and exits; stdin is ignored. With no argument and a
+non-interactive (piped) stdin it reads all of stdin as the progression. With no
+argument and an interactive terminal it starts the REPL. `--` ends option parsing,
+so a progression beginning with `-` is taken literally.
+
+One-shot:
+
+```bash
+./build/Cli/chordtext-cli.exe --key A --mode minor "i-iv-V"
+```
+
+```text
+Progression: i-iv-V
+Key: A minor · Voicing: voice-led · Range: C3-C6 · Velocity: 100
+
+Chord  Degree  Notes   Beats  MIDI
+Am     i       A C E   4      57 60 64
+Dm     iv      A D F   4      57 62 65
+E      V       G# B E  4      56 59 64
+```
+
+Piped stdin:
+
+```bash
+echo "C, H, C99" | ./build/Cli/chordtext-cli.exe
+```
+
+```text
+Progression: C, H, C99
+Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100
+
+2 errors:
+Error at character 3: unknown chord root (H)
+Error at character 6: unknown extension "9" (C99)
+```
+
+(exit code 1)
+
+REPL (interactive terminal only): run `chordtext-cli` with no arguments. The banner
+prints the current settings and the prompt is `chord> `; a session looks like:
+
+```text
+Chord Text CLI — :help for commands
+Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100
+
+chord> Cmaj7
+Progression: Cmaj7
+Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100
+
+Chord  Degree  Notes    Beats  MIDI
+Cmaj7  Imaj7   C E G B  4      48 52 55 59
+chord> :key A
+Key: A minor · Voicing: voice-led · Range: C3-C6 · Velocity: 100
+chord> :quit
+```
+
+The full command list is under [REPL](#repl).
+
+### Options
+
+| Option | Values | Default |
+|---|---|---|
+| `--key <tonic>` | `C C# Db D D# Eb E F F# Gb G G# Ab A A# Bb B`, case-insensitive | `C` |
+| `--mode <major\|minor>` | case-insensitive | `major` |
+| `--voicing <voice-led\|root-position>` | case-insensitive; `root` is an alias for `root-position` | `voice-led` |
+| `--range <C2-C5\|C3-C6\|C4-C7>` | case-insensitive | `C3-C6` |
+| `--velocity <1-127>` | integer | `100` |
+| `--bpm <4-999>` | finite number in range | `120` |
+| `--json` | flag | off |
+| `--out <path>` | file path | off |
+| `--help` | flag | — |
+
+Defaults are the plugin's defaults. `--bpm` only affects a written MIDI file; it is
+reported in JSON but has no effect on the table. Options accept both `--name value`
+and `--name=value`, except boolean flags, which reject an attached value. If an
+option is repeated, the last occurrence wins. Unknown options, missing values, and
+invalid values are usage errors.
+
+### Human output
+
+A successful report prints a `Progression:` header (with runs of whitespace and
+newlines collapsed to single spaces, or `(empty)` for empty text), a settings line,
+and a table:
+
+```text
+Progression: Cmaj7, Am7, Dm7, G7
+Key: C major · Voicing: root-position · Range: C2-C5 · Velocity: 100
+
+Chord  Degree  Notes    Beats  MIDI
+Cmaj7  Imaj7   C E G B  4      36 40 43 47
+Am7    vi7     A C E G  4      45 48 52 55
+Dm7    ii7     D F A C  4      38 41 45 48
+G7     V7      G B D F  4      43 47 50 53
+```
+
+Columns are left-aligned with two spaces between them. The `Notes` column follows
+the current voicing, matching the plugin's learning table, so an inversion appears
+in voicing order and a slash bass may repeat a pitch class. The `MIDI` column is the
+same voicing as space-separated MIDI note numbers after voicing, range, and slash
+bass are applied. `Beats` uses compact formatting: integral values omit the decimal
+point (for example `4`, `1.5`). An empty progression is valid and prints
+`Empty progression (no chords).`.
+
+Diagnostics replace the table and use the editor's exact wording, one error per line
+with the token's character offset:
+
+```text
+Progression: C, H, C99
+Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100
+
+2 errors:
+Error at character 3: unknown chord root (H)
+Error at character 6: unknown extension "9" (C99)
+```
+
+The count line is `1 error:` or `N errors:`. The parenthetical token is omitted when
+the token is empty. The CLI reports only the current input; it never shows a stale
+table from an earlier valid progression.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Progression parsed successfully (including an empty progression) and any requested file was written |
+| 1 | The progression has parse errors |
+| 2 | Usage error, or a requested file could not be written |
+
+In one-shot mode results go to stdout and usage errors to stderr. I/O errors go to
+stderr in human mode and into the JSON `error` field in JSON mode. A REPL session
+always exits 0, even after earlier parse errors.
+
+### REPL
+
+Running `chordtext-cli` with no arguments in an interactive terminal starts a REPL.
+The banner prints a current-settings line and a hint to use `:help`, and the prompt
+is `chord> `. Settings stay sticky across lines until changed. A non-empty line that
+does not start with `:` is parsed as a progression and reported with the current
+settings; a blank line is ignored; a parse error does not exit the REPL.
+
+| Command | Behaviour |
+|---|---|
+| `:key <tonic>` | Set the key tonic; same validation as `--key` |
+| `:mode <major\|minor>` | Set the mode |
+| `:voicing <voice-led\|root-position>` | Set the voicing mode |
+| `:range <C2-C5\|C3-C6\|C4-C7>` | Set the pitch range |
+| `:velocity <1-127>` | Set the velocity |
+| `:bpm <4-999>` | Set the MIDI tempo |
+| `:json <on\|off>` | Switch report formatting between human and JSON |
+| `:export <path>` | Write the last successfully parsed progression with the current settings |
+| `:help` | List commands and current settings |
+| `:quit`, `:q` | Exit |
+
+After a successful setting change the command prints the current-settings line; an
+invalid command or value prints a short error and keeps the previous value. `:export`
+with no valid progression yet prints an error and writes nothing. EOF (Ctrl+Z on
+Windows) exits the REPL. Command feedback goes to stderr and progression reports go
+to stdout, so stdout stays parseable when `:json on` is active.
+
+### JSON output
+
+`--json` prints one pretty-printed object with two-space indentation and a trailing
+newline:
+
+```json
+{
+  "text": "Cmaj7",
+  "settings": {
+    "key": "C",
+    "mode": "major",
+    "voicing": "root-position",
+    "range": "C2-C5",
+    "velocity": 100,
+    "bpm": 120
+  },
+  "valid": true,
+  "diagnostics": [],
+  "chords": [
+    {
+      "source": "Cmaj7",
+      "symbol": "Cmaj7",
+      "degree": "Imaj7",
+      "spelledTones": ["C", "E", "G", "B"],
+      "notes": ["C", "E", "G", "B"],
+      "voicing": [36, 40, 43, 47],
+      "startBeat": 0,
+      "durationBeats": 4
+    }
+  ],
+  "midiFile": null,
+  "error": null
+}
+```
+
+Field meanings:
+
+- `settings` holds the effective settings as canonical strings (`key` as written in
+  the option list, `mode` as `major`/`minor`, `voicing` as `voice-led`/
+  `root-position`, `range` as `C2-C5`/`C3-C6`/`C4-C7`).
+- `valid` is false when parse diagnostics are present; then `chords` is empty and
+  `diagnostics` is populated with `offset`, `token`, and `message` entries. An empty
+  but valid progression has `"valid": true` and `"chords": []`.
+- `spelledTones` is the chord's tones in quality order, independent of voicing.
+- `notes` is the voiced spelling, one entry per `voicing` value, matching the human
+  table's `Notes` column.
+- `voicing` is the same chord as space-separated MIDI note numbers.
+- `startBeat` is cumulative across chords.
+- `midiFile` is an absolute path string after a successful write, otherwise `null`.
+- `error` is a string for a file I/O or empty-export failure, otherwise `null`.
+
+Strings are escaped per JSON and numbers are locale-independent. Whitespace and
+indentation are not part of the contract; consumers must parse the document. In JSON
+mode no human result text is written to stdout; usage errors remain human-readable
+on stderr.
+
+### Writing MIDI files
+
+`--out <path>` (one-shot or piped mode) and `:export <path>` (REPL) write one loop
+of the current progression as a Standard MIDI File, using the same shared writer as
+the plugin's export: 4/4 time signature, tempo from `--bpm` (default 120), track
+name `Chord Text`, 960 ticks per quarter note, channel 1, and note-offs before
+note-ons at equal ticks. `--out` requires a progression argument or piped input;
+using it to start an interactive REPL is a usage error — use `:export` there.
+
+If the path does not already end in `.mid` (case-insensitive), its final extension is
+replaced with `.mid`; a path with no extension gains one. Relative paths resolve
+against the current working directory, and the success line (and JSON `midiFile`)
+report the absolute path. `:export` re-parses the last valid text with the current
+settings, so the written file always matches what a report would show now. Writing to
+an empty progression fails with exit code 2 in one-shot mode; the error goes to
+stderr (or the JSON `error` field) and no `Wrote` line is printed.
+
+### Windows and UTF-8
+
+The utility is Windows x64 only, consistent with the project. It builds with `wmain`
+and converts command-line arguments to UTF-8, so chord tokens containing `°` or `ø`
+survive the command line. It sets the console input and output code pages to UTF-8,
+so non-ASCII output displays correctly, and uses `std::filesystem::u8path` for
+user-supplied paths. All numeric formatting and parsing uses the classic locale.
+
 ## Tests
 
 `Tests/TheoryTest.cpp` is plain C++ with no JUCE dependency and covers parsing,
 spelling, keys, voicing, and the render plan. `Tests/ProcessorTest.cpp` is a JUCE
 console application covering transport behaviour, note lifecycle, parameters, state
 round-trip, the editor, Regenerate, the Beats column, the drag-file writer and its
-two modes, and MIDI export/read-back.
+two modes, and MIDI export/read-back. `Tests/CliTest.cpp` covers the command-line
+utility: option parsing, formatting, JSON, and REPL state.
 
-Run both suites through a build script:
+Run all three suites through a build script:
 
 ```bash
 ./build.sh --test
@@ -516,12 +770,14 @@ Or run the already-built executables directly:
 ```bash
 ./build/Tests/TheoryTests.exe
 ./build/Tests/ProcessorTests.exe
+./build/Tests/CliTests.exe
 ```
 
-Each executable prints a summary such as `87 checks, 0 failures` for `TheoryTests`
-and `233 checks, 0 failures` for `ProcessorTests`, and returns a non-zero exit code
-if any check fails. The build scripts stop on the first failing suite. The build must
-produce no warnings from project code under JUCE's recommended warning flags.
+Each executable prints a summary such as `115 checks, 0 failures` for `TheoryTests`,
+`233 checks, 0 failures` for `ProcessorTests`, and `193 checks, 0 failures` for
+`CliTests`, and returns a non-zero exit code if any check fails. The build scripts
+stop on the first failing suite. The build must produce no warnings from project
+code under JUCE's recommended warning flags.
 
 ## Licensing
 
@@ -577,6 +833,17 @@ Known limitations in v1:
   changes.
 - Only one progression is active at a time; there are no saved presets beyond the
   host project state.
+
+Command-line utility limitations:
+
+- Windows x64 only, consistent with the project.
+- No audio preview; the tool reports text and writes MIDI files only.
+- The REPL is line-oriented with no history, editing, or completion.
+- `--bpm` defaults to 120 because there is no host tempo to observe.
+- JSON in the REPL is one document per report, interleaved with human command
+  feedback on stderr, so it is not a single JSON stream.
+- The shared writer replaces the JUCE export implementation; parity is guarded by
+  the existing read-back tests rather than a byte-for-byte comparison.
 
 Explicitly out of scope for v1:
 
@@ -644,10 +911,12 @@ anything that affects this plugin; it is not required to build or use Chord Text
 CMakeLists.txt              plugin, test executables, JUCE subdirectory
 README.md                   this document
 build.sh / build.bat        configure/build/test wrappers
-Source/Theory/              JUCE-free notes, keys, chords, parsers, voicing, render plan
+Source/Theory/              JUCE-free notes, keys, chords, parsers, voicing, render plan,
+                            MIDI file writer
 Source/Plugin/              processor (transport, state, export, drag files), editor,
                             clip drag component
-Tests/                      TheoryTests and ProcessorTests
+Source/Cli/                 command-line utility (options, report, session, main)
+Tests/                      TheoryTests, ProcessorTests, and CliTests
 docs/superpowers/specs/     design specification
 libs/JUCE/                  pinned JUCE checkout (ignored by Git)
 build/                      generated build tree (ignored by Git)
