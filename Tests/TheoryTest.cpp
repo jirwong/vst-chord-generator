@@ -59,6 +59,13 @@ int main()
     CHECK (degreeLabel (chord ({'C', 0}, "m"), Key {{'C', 0}, Mode::major}) == "i");
     CHECK (degreeLabel (chord ({'B', -1}, ""), Key {{'C', 0}, Mode::major}) == "bVII");
 
+    CHECK (noteNameForPitch (chord ({'C', 1}, ""), 65) == "E#");
+    CHECK (noteNameForPitch (chord ({'C', 1}, ""), 62) == "D");
+    CHECK (notesForVoicing (chord ({'C', 0}, "maj7"), {48, 52, 55, 59}) == "C E G B");
+    CHECK (notesForVoicing (chord ({'G', 0}, "7"), {62, 65, 67, 71}) == "D F G B");
+    CHECK (notesForVoicing (chord ({'C', 0}, "", {}, PitchClass {'E', 0}),
+                            {52, 60, 64, 67}) == "E C E G");
+
     auto parse = [] (std::string token)
     {
         return parseChordSymbol (token, 7);

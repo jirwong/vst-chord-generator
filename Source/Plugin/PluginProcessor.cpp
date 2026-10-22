@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 
 #include "PluginEditor.h"
+#include "Theory/Chord.h"
 #include "Theory/Key.h"
 #include "Theory/Progression.h"
 #include "Theory/Voicer.h"
@@ -85,34 +86,6 @@ chordtext::PitchClass pitchClassFromName (const char* name)
         alteration = -1;
 
     return { text[0], alteration };
-}
-
-std::string noteNameForPitch (const chordtext::Chord& chord, int midi)
-{
-    const auto pitchClass = ((midi % 12) + 12) % 12;
-
-    for (const auto& tone : chord.tones())
-    {
-        if (((tone.semitone() % 12) + 12) % 12 == pitchClass)
-            return tone.name();
-    }
-
-    return juce::MidiMessage::getMidiNoteName (midi, true, false, 3).toStdString();
-}
-
-std::string notesForVoicing (const chordtext::Chord& chord, const std::vector<int>& voicing)
-{
-    std::string result;
-
-    for (const auto pitch : voicing)
-    {
-        if (! result.empty())
-            result += ' ';
-
-        result += noteNameForPitch (chord, pitch);
-    }
-
-    return result;
 }
 } // namespace
 
@@ -267,7 +240,7 @@ void ChordTextAudioProcessor::rebuildPlan()
         LearningRow row;
         row.chord = step.chord.symbol();
         row.degree = chordtext::degreeLabel (step.chord, key);
-        row.notes = notesForVoicing (step.chord, voicings[index]);
+        row.notes = chordtext::notesForVoicing (step.chord, voicings[index]);
         row.durationBeats = step.durationBeats;
         learningRows.push_back (std::move (row));
     }
