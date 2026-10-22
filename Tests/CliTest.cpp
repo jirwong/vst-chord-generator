@@ -106,6 +106,9 @@ int main()
     CHECK (! helpText().empty());
     CHECK (helpText().find ("--key") != std::string::npos);
     CHECK (helpText().find ("--out") != std::string::npos);
+    CHECK (helpText().find ("chordtext-cli") != std::string::npos);
+    CHECK (helpText().find ("  1  progression parse errors") != std::string::npos);
+    CHECK (helpText().find ("  2  usage error") != std::string::npos);
 
     CHECK (resolveMidiPath ("loop").filename().u8string() == "loop.mid");
     CHECK (resolveMidiPath ("loop").is_absolute());

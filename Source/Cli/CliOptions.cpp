@@ -166,7 +166,7 @@ CliParseResult parseOptions (const std::vector<std::string>& args)
 std::string helpText()
 {
     return
-        "Usage: ChordTextCli [options] [progression]\n"
+        "Usage: chordtext-cli [options] [progression]\n"
         "\n"
         "Generates a MIDI file from a chord progression.\n"
         "\n"
@@ -187,7 +187,8 @@ std::string helpText()
         "end option parsing.\n"
         "\n"
         "Exit codes:\n"
-        "  0  success\n"
-        "  1  usage error\n";
+        "  0  success (including an empty progression)\n"
+        "  1  progression parse errors\n"
+        "  2  usage error, or a MIDI file could not be written\n";
 }
 }
