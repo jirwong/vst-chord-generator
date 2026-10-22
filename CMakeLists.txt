@@ -23,7 +23,8 @@ set(THEORY_SOURCES
     Source/Theory/RomanNumeralParser.cpp
     Source/Theory/Progression.cpp
     Source/Theory/Voicer.cpp
-    Source/Theory/RenderPlan.cpp)
+    Source/Theory/RenderPlan.cpp
+    Source/Theory/MidiFileWriter.cpp)
 set(PLUGIN_SOURCES
     Source/Plugin/PluginProcessor.cpp
     Source/Plugin/PluginEditor.cpp

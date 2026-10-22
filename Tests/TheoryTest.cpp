@@ -2,12 +2,100 @@
 #include "Theory/Chord.h"
 #include "Theory/ChordSymbolParser.h"
 #include "Theory/Key.h"
+#include "Theory/MidiFileWriter.h"
 #include "Theory/Note.h"
 #include "Theory/Progression.h"
 #include "Theory/RenderPlan.h"
 #include "Theory/Voicer.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <vector>
+
 using namespace chordtext;
+
+struct TestMidiEvent
+{
+    int tick = 0;
+    bool noteOn = false;
+    int pitch = 0;
+    int velocity = 0;
+    int channel = 1;
+};
+
+static int readU32 (const std::vector<std::uint8_t>& bytes, std::size_t offset)
+{
+    return (int (bytes[offset]) << 24) | (int (bytes[offset + 1]) << 16)
+         | (int (bytes[offset + 2]) << 8) | int (bytes[offset + 3]);
+}
+
+static int readVlq (const std::vector<std::uint8_t>& bytes, std::size_t& offset)
+{
+    int value = 0;
+    for (;;)
+    {
+        const auto byte = bytes[offset++];
+        value = (value << 7) | (byte & 0x7F);
+        if ((byte & 0x80) == 0)
+            return value;
+    }
+}
+
+static std::vector<TestMidiEvent> readNoteEvents (const std::vector<std::uint8_t>& bytes)
+{
+    std::vector<TestMidiEvent> result;
+    auto offset = std::size_t (8 + readU32 (bytes, 4));
+    const auto trackEnd = offset + 8 + readU32 (bytes, offset + 4);
+    offset += 8;
+    int tick = 0;
+    int running = 0;
+
+    while (offset < trackEnd)
+    {
+        tick += readVlq (bytes, offset);
+        auto status = bytes[offset++];
+        if (status < 0x80)
+        {
+            --offset;
+            status = running;
+        }
+        else
+        {
+            running = status;
+        }
+
+        if (status == 0xFF)
+        {
+            const auto type = bytes[offset++];
+            const auto length = readVlq (bytes, offset);
+            offset += std::size_t (length);
+            if (type == 0x2F)
+                break;
+            continue;
+        }
+
+        const auto type = status & 0xF0;
+        const auto channel = (status & 0x0F) + 1;
+        const auto data1 = int (bytes[offset++]);
+        const auto data2 = (type == 0xC0 || type == 0xD0) ? 0 : int (bytes[offset++]);
+
+        if (type == 0x90 && data2 > 0)
+            result.push_back ({tick, true, data1, data2, channel});
+        else if (type == 0x80 || (type == 0x90 && data2 == 0))
+            result.push_back ({tick, false, data1, data2, channel});
+    }
+
+    return result;
+}
+
+static bool containsBytes (const std::vector<std::uint8_t>& bytes,
+                           std::initializer_list<std::uint8_t> pattern)
+{
+    return std::search (bytes.begin(), bytes.end(), pattern.begin(), pattern.end())
+        != bytes.end();
+}
 
 int main()
 {
@@ -165,6 +253,63 @@ int main()
     CHECK (plan.events[8].beat == 4.0);
     CHECK (plan.events.back().beat == 8.0);
     CHECK (! plan.events.back().noteOn);
+
+    RenderPlan midiPlan;
+    midiPlan.lengthBeats = 4.0;
+    midiPlan.events = {
+        {4.0, 64, 0, 1, false, 0},
+        {4.0, 60, 0, 1, false, 0},
+        {0.0, 64, 100, 1, true, 0},
+        {0.0, 60, 100, 1, true, 0},
+    };
+
+    const MidiFileSettings exportSettings;
+    const auto bytes = serialiseMidiFile (midiPlan, exportSettings);
+    CHECK (std::string (bytes.begin(), bytes.begin() + 4) == "MThd");
+    CHECK (readU32 (bytes, 4) == 6);
+    CHECK ((bytes[8] == 0 && bytes[9] == 0));                 // format 0
+    CHECK ((bytes[10] == 0 && bytes[11] == 1));               // one track
+    CHECK ((bytes[12] == 0x03 && bytes[13] == 0xC0));         // 960 PPQ
+    CHECK (containsBytes (bytes, {0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20})); // 500000 us
+    CHECK (containsBytes (bytes, {0xFF, 0x58, 0x04, 0x04, 0x02, 0x18, 0x08}));
+    CHECK (containsBytes (bytes, {0xFF, 0x2F, 0x00}));
+    CHECK (bytes.back() == 0x00);
+    CHECK (serialiseMidiFile (midiPlan, exportSettings) == bytes);
+
+    const auto events = readNoteEvents (bytes);
+    CHECK (events.size() == 4);
+    CHECK (events[0].tick == 0 && events[0].noteOn && events[0].pitch == 60
+           && events[0].velocity == 100 && events[0].channel == 1);
+    CHECK (events[1].tick == 0 && events[1].noteOn && events[1].pitch == 64);
+    CHECK (events[2].tick == 3840 && ! events[2].noteOn && events[2].pitch == 60);
+    CHECK (events[3].tick == 3840 && ! events[3].noteOn && events[3].pitch == 64);
+
+    auto dragSettings = exportSettings;
+    dragSettings.includeTempoAndTimeSignature = false;
+    const auto dragBytes = serialiseMidiFile (midiPlan, dragSettings);
+    CHECK (! containsBytes (dragBytes, {0xFF, 0x51}));
+    CHECK (! containsBytes (dragBytes, {0xFF, 0x58}));
+    CHECK (containsBytes (dragBytes, {0xFF, 0x2F, 0x00}));
+
+    const auto tempFile = std::filesystem::temp_directory_path()
+                              / "chordtext-midi-writer-test.mid";
+    std::filesystem::remove (tempFile);
+    std::string writeError;
+    CHECK (writeMidiFile (midiPlan, tempFile, exportSettings, writeError));
+    CHECK (writeError.empty());
+    CHECK (std::filesystem::exists (tempFile));
+    std::filesystem::remove (tempFile);
+
+    const auto notADirectory = std::filesystem::temp_directory_path()
+                                  / "chordtext-midi-writer-blocker";
+    std::filesystem::remove_all (notADirectory);
+    {
+        std::ofstream blockerFile (notADirectory);
+        blockerFile << "x";
+    }
+    CHECK (! writeMidiFile (midiPlan, notADirectory / "out.mid", exportSettings, writeError));
+    CHECK (! writeError.empty());
+    std::filesystem::remove (notADirectory);
 
     return reportAndExit();
 }
