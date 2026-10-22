@@ -56,7 +56,7 @@ Verified environment:
 - Visual Studio 2022 Build Tools with the C++ workload (MSVC 14.44 or compatible).
 - CMake 3.22 or newer; the Build Tools copy may be used by full path.
 - JUCE 8.0.15, cloned once into `libs/JUCE`, which is git-ignored.
-- FL Studio 2025 for in-host verification.
+- A VST3-compatible DAW for in-host verification.
 - No IDE required; the build is command-line driven.
 
 Constraints:
@@ -441,7 +441,7 @@ nearest valid octave and clamped; this case is covered by tests.
 - Export uses the same `RenderPlan` as live playback.
 - Export is disabled while the current text has errors.
 - The file chooser runs on the message thread.
-- The written file must be readable by `juce::MidiFile` and by FL Studio.
+- The written file must be readable by `juce::MidiFile` and by a DAW.
 
 ## 9. Editor
 
@@ -564,7 +564,7 @@ Voicing and render plan:
 
 ### 12.3 Manual verification
 
-1. Build the walking skeleton and route it to an instrument in FL Studio.
+1. Build the walking skeleton and route it to an instrument in a DAW.
 2. Confirm live playback follows transport and tempo.
 3. Record generated notes into the piano roll and check timing.
 4. Export a `.mid`, import it, and compare with live playback.
@@ -585,7 +585,7 @@ produces the VST3 and both test executables. `build.sh --test` and
 ## 13. Milestones
 
 1. **Walking skeleton** — MIDI-effect plugin, minimal `C`/`I` parsing, one chord
-   per bar, routed to an instrument in FL Studio. This settles the highest-risk
+   per bar, routed to an instrument in a DAW. This settles the highest-risk
    host-routing question.
 2. **Theory core** — keys, notes, chords, absolute and Roman parsers, diagnostics,
    full theory tests.
@@ -601,7 +601,7 @@ produces the VST3 and both test executables. `build.sh --test` and
 
 ## 14. Risks
 
-- **FL Studio MIDI routing** is the main risk. Milestone 1 exists to resolve it
+- **Host MIDI routing** is the main risk. Milestone 1 exists to resolve it
   before the rest is built. If a pure MIDI effect cannot drive another instrument,
   the fallback is an instrument/audio-effect shape with MIDI output; the theory
   core and render plan do not change.
@@ -613,7 +613,7 @@ produces the VST3 and both test executables. `build.sh --test` and
   manual listening is required.
 - **Editor keyboard focus** must be configured correctly for typing in the host.
 - **MIDI-file import** may interpret tempo or ticks differently in some hosts;
-  verify in FL Studio and with a read-back test.
+  verify in a DAW and with a read-back test.
 
 ## 15. Verification summary
 
@@ -622,9 +622,9 @@ produces the VST3 and both test executables. `build.sh --test` and
 | Absolute and Roman parsing | Theory tests, success criteria 2–3 |
 | Default and explicit timing | Theory tests, success criterion 5 |
 | Voice-led and root-position | Theory tests, manual listening |
-| Live transport and loop | Plugin tests, manual FL Studio check |
+| Live transport and loop | Plugin tests, manual DAW check |
 | No stuck notes | Plugin tests, manual start/stop/seek |
-| MIDI export | Plugin tests, read-back, FL Studio import |
+| MIDI export | Plugin tests, read-back, DAW import |
 | Learning table and diagnostics | Editor review, manual check |
 | State restore | Plugin state round-trip test |
 | Build from clean checkout | Build verification, README |

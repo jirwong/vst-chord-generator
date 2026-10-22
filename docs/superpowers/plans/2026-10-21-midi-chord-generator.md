@@ -249,11 +249,11 @@ cmake --build build --config Release --target ProcessorTests
 
 Expected: `3 checks, 0 failures`, exit code 0.
 
-- [ ] **Step 6: Verify the walking skeleton in FL Studio**
+- [ ] **Step 6: Verify the walking skeleton in a DAW**
 
-Build the plugin, add the VST3 output folder as a search path in FL Studio, load `Chord Text` as a generator, and route it to an instrument (Patcher or a MIDI-out route). Press play and confirm the instrument receives C–E–G.
+Build the plugin, add the VST3 output folder as a search path in the DAW, load `Chord Text` as a generator, and route it to an instrument (via the host's plugin chain or a MIDI-out route). Press play and confirm the instrument receives C–E–G.
 
-This step is a gate. If FL Studio cannot route a VST3 MIDI effect to another instrument, stop and report it; the fallback is an instrument/audio-effect shape with MIDI output, and the theory core is unchanged.
+This step is a gate. If the DAW cannot route a VST3 MIDI effect to another instrument, stop and report it; the fallback is an instrument/audio-effect shape with MIDI output, and the theory core is unchanged.
 
 - [ ] **Step 7: Commit**
 
@@ -1314,7 +1314,7 @@ Expected: `0 failures`.
 
 - [ ] **Step 5: Verify the editor manually**
 
-Build the VST3, load it in FL Studio, and confirm:
+Build the VST3, load it in a DAW, and confirm:
 
 - Typing changes the learning table.
 - Key, mode, voicing, range, velocity, and loop controls work.
@@ -1349,13 +1349,13 @@ Document:
 
 - prerequisites and the pinned JUCE clone command,
 - configure/build commands and both build scripts,
-- VST3 output path and FL Studio routing/install instructions,
+- VST3 output path and DAW routing/install instructions,
 - the complete supported syntax with examples,
 - how to run `TheoryTests` and `ProcessorTests`,
 - the learning table and export behavior,
 - licensing,
 - known limitations and out-of-scope features,
-- the manual FL Studio checklist from the spec.
+- the manual DAW checklist from the spec.
 
 - [ ] **Step 2: Run the full verification**
 
@@ -1367,7 +1367,7 @@ Expected: both test executables report `0 failures`, and the VST3 is present und
 
 - [ ] **Step 3: Run the manual checklist**
 
-In FL Studio 2025:
+In a VST3-compatible DAW:
 
 1. Route `Chord Text` to an instrument and hear the default progression.
 2. Change text to `C, Cmaj7, Dmaj7, Emin9, Fmaj7` and confirm the notes.
@@ -1407,4 +1407,4 @@ git commit -m "Document, test, and verify the chord generator"
 | Parameters and state restore | Task 8 processor tests |
 | Learning table and diagnostics | Task 10 editor, manual check |
 | Build from clean checkout | Task 11 `./build.sh --test` |
-| FL Studio MIDI routing | Task 1 manual gate, Task 11 manual check |
+| Host MIDI routing | Task 1 manual gate, Task 11 manual check |
