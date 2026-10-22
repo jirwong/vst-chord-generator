@@ -984,7 +984,7 @@ session.handleLine (":mode minor");
 output = session.handleLine ("i-iv-V");
 CHECK (output.report.find ("Am") != std::string::npos);
 CHECK (output.report.find ("Dm") != std::string::npos);
-CHECK (output.report.find ("E G# B") != std::string::npos);
+CHECK (output.report.find ("G# B E") != std::string::npos);
 
 output = session.handleLine (":velocity 0");
 CHECK (output.feedback.find ("Error") != std::string::npos);
