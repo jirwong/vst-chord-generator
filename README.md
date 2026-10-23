@@ -1,13 +1,14 @@
 # Chord Text
 
 Chord Text is a Windows x64 VST3 MIDI generator. Type a chord progression as chord
-symbols or Roman numerals, and the plugin plays it in sync with the host transport
-or exports it as a Standard MIDI File. You can also drag one loop from the editor
-into a DAW such as Bitwig as a MIDI clip. The editor shows a learning table with
-each chord's functional degree, spelled chord tones, and duration in beats.
+symbols or Roman numerals. The plugin plays it in sync with the host transport, or
+exports it as a Standard MIDI File. You can also drag one loop from the editor into
+a DAW such as Bitwig as a MIDI clip. The editor shows a learning table. The table
+shows the functional degree, the spelled chord tones, and the duration of each
+chord in beats.
 
-The plugin produces MIDI only. It has no audio output and no built-in synth, so it
-must be routed to an instrument in the host.
+The plugin produces MIDI only. It has no audio output and no built-in synth. You
+must route it to an instrument in the host.
 
 For the full syntax reference, see [SYNTAX.md](SYNTAX.md).
 
@@ -16,7 +17,7 @@ For the full syntax reference, see [SYNTAX.md](SYNTAX.md).
 - Windows 10 or 11, 64-bit.
 - Visual Studio 2022 Build Tools with the "Desktop development with C++" workload
   (MSVC 14.44 or compatible).
-- CMake 3.22 or newer. The copy shipped with Build Tools is sufficient; the build
+- CMake 3.22 or newer. The copy shipped with Build Tools is sufficient. The build
   scripts find it by full path when it is not on `PATH`.
 - Git.
 - A VST3-compatible DAW for manual in-host verification (optional for building and
@@ -90,8 +91,8 @@ suite fails.
 
 ## Install and route in a DAW
 
-Chord Text is a VST3 MIDI effect (`IS_MIDI_EFFECT TRUE`, MIDI input and output
-enabled, no audio buses). Incoming MIDI is ignored in v1.
+Chord Text is a VST3 MIDI generator (`IS_MIDI_EFFECT TRUE`, MIDI input and output
+enabled, no audio buses). The plugin ignores incoming MIDI in v1.
 
 ### Install
 
@@ -107,66 +108,69 @@ or leave it in the build tree and add the folder as a plugin search path:
 1. In the DAW's plugin settings, add
    `...\chord-generator\build\ChordText_artefacts\Release\VST3`
    to the additional VST3 search paths.
-2. Start a plugin scan and confirm that **Chord Text** appears as a MIDI effect /
-   generator.
+2. Start a plugin scan and confirm that **Chord Text** appears as a MIDI generator.
 
 ### Route to an instrument
 
-The plugin must drive another instrument; it makes no sound by itself. Two common
+The plugin must drive another instrument. It makes no sound by itself. Two common
 routes are:
 
 - **Host plugin chain:** insert **Chord Text** before an instrument (for example a
-  synth or sampler) in the same channel or instrument chain so the plugin's MIDI
-  output feeds the instrument's MIDI input directly.
+  synth or sampler) in the same channel or instrument chain. The plugin's MIDI
+  output then feeds the instrument's MIDI input directly.
 - **MIDI output ports:** load Chord Text in one channel, then route its MIDI output
-  port to a second channel/instrument whose MIDI input port matches.
+  port to a second channel or instrument whose MIDI input port matches.
 
 The exact routing steps depend on the DAW and its plugin wrapper. In-host routing is
-part of the manual checklist below and has **not** been verified in this environment.
+in the manual checklist below. It has **not** been verified in this environment.
 
 ## Quick start
 
 1. Load Chord Text in a channel and route it to an instrument.
-2. Press Play in the DAW. The default progression
-   `Cmaj7, Am7, Dm7, G7` plays, one chord per 4/4 bar, and loops.
-3. Type a progression in the text box. Parsing is debounced by 150 ms, so playback
-   updates shortly after typing stops. Press **Regenerate** to apply the current
-   text immediately.
+2. Press Play in the DAW. The default progression `Cmaj7, Am7, Dm7, G7` plays one
+   chord per 4/4 bar and loops.
+3. Type a progression in the text box. The plugin parses the text 150 ms after your
+   last edit, so playback updates soon after you stop typing. Press **Regenerate**
+   to apply the current text immediately.
 4. Use the key, mode, voicing, range, velocity, and loop controls to shape the
    output.
-5. Read the learning table for each chord's degree, spelled notes, and duration,
-   then drag the clip preview into the DAW or export a `.mid` file if desired.
+5. Read the learning table for the degree, spelled notes, and duration of each
+   chord, then drag the clip preview into the DAW or export a `.mid` file.
 
-Live generation requires host playhead data with a PPQ position and tempo. The
-status line reports `Transport ready` while the transport plays, `Transport
-stopped` when a playhead position exists but the transport is not playing, and
-`No transport available` when the host supplies no usable position. In the last
-case no notes are generated; the plugin does not free-run.
+Live generation needs host playhead data with a PPQ position and tempo. The status
+line shows one of these messages:
 
-The progression is anchored to song position 0. Starting or seeking into the middle
-of a chord plays that chord from the start of the block, and the progression loops
-with a length equal to the sum of the chord durations. Loop is on by default; with
-loop off, the progression plays once. Stop, seek, bypass, plan changes, and loop wrap
-release active notes before new ones are emitted. When the host calls
-`prepareToPlay` again, pitches that were sounding are queued for release and their
-note-offs are emitted at sample 0 of the next block before any new events.
-`releaseResources` cannot emit MIDI, so it only clears internal note tracking; the
-host is expected to flush sounding notes when it releases the plugin.
+- `Transport ready` — the transport is playing.
+- `Transport stopped` — a playhead position exists, but the transport is not
+  playing.
+- `No transport available` — the host supplies no usable position.
+
+With no usable position, the plugin generates no notes and does not free-run.
+
+The progression is anchored to song position 0. If you start playback or seek into
+the middle of a chord, the plugin plays that chord from the start of the block. The
+progression loops with a length equal to the sum of the chord durations. Loop is on
+by default; with loop off, the progression plays once. The plugin releases active
+notes before it emits new notes after a stop, a seek, a bypass, a plan change, or a
+loop wrap. When the host calls `prepareToPlay` again, the plugin queues the sounding
+pitches for release and emits their note-offs at sample 0 of the next block, before
+any new events. `releaseResources` cannot emit MIDI, so it only clears the internal
+note tracking; the host must flush sounding notes when it releases the plugin.
 
 ## Regenerate and automatic parsing
 
-**Regenerate** sits on the progression header row. Clicking it cancels any pending
-debounce, parses the text in the editor immediately, and rebuilds the playback plan
-and learning table from the current text and settings. It forces a rebuild even when
-the text is unchanged.
+**Regenerate** is on the progression header row. When you click it, the plugin
+cancels any pending debounce, parses the text in the editor immediately, and
+rebuilds the playback plan and learning table from the current text and settings. It
+rebuilds the plan even if the text did not change.
 
-Automatic parsing remains enabled: the text is still parsed 150 ms after the last
-edit. Regenerate is an explicit alternative to waiting for that timer, not a
-replacement for it.
+Automatic parsing stays on: the plugin parses the text 150 ms after your last edit.
+Regenerate is an explicit alternative to waiting for that timer, not a replacement
+for it.
 
-If the text is invalid, Regenerate does not replace the last valid plan or table
-rows. The existing progression keeps playing and the diagnostics area shows the
-errors. An empty progression is valid; Regenerate then produces an empty table and
+If the text is not valid, Regenerate does not replace the last valid plan or table
+rows. The current progression keeps playing and the diagnostics area shows the
+errors. An empty progression is valid; Regenerate then makes an empty table and
 disables export and dragging.
 
 ## Syntax reference
@@ -185,12 +189,12 @@ C:8, Am7:4, F:4, G:4
 C/E, F#m7b5/C
 ```
 
-Every chord lasts 4 beats by default, and separators can be mixed. Absolute
-chords and Roman numerals can be used in the same progression. The plugin
-editor and `chordtext-cli` share the parser, so the same text produces the same
-result in both. To check syntax without a DAW, run `chordtext-cli "C, H"`.
+Every chord lasts 4 beats by default. Separators can be mixed. You can use absolute
+chords and Roman numerals in the same progression. The plugin editor and
+`chordtext-cli` share the parser, so the same text produces the same result in both.
+To check syntax without a DAW, run `chordtext-cli "C, H"`.
 
-The key selector matters for Roman numerals and the Degree column; it does not
+The key selector matters for Roman numerals and the Degree column. It does not
 transpose absolute chords.
 
 ### The learning table
@@ -204,26 +208,26 @@ The table shows the last valid progression:
 | Dm7 | ii7 | D F A C | 4 |
 | G7 | V7 | G B D F | 4 |
 
-The Beats column is the chord's effective duration, including the default of 4
-beats when the input has no `:N` suffix. It is displayed as a compact number, so a
-chord written as `Am7:1.5` shows `1.5`, not `1.5 beats`. The Notes column follows
-the current voicing and range and uses each chord's spelled tones, so Roman
-numerals inherit the key's spelling. The Degree column is a normalized functional
-label; absolute chords are labeled best-effort relative to the selected key using
-the root letter and accidental (not by nearest pitch class). Chromatic or ambiguous
-roots use a best-effort `b`/`#` label. The row for the currently playing chord is
-highlighted during playback.
+The Beats column is the chord's effective duration. It includes the default of 4
+beats when the input has no `:N` suffix. It shows a compact number, so a chord
+written as `Am7:1.5` shows `1.5`, not `1.5 beats`. The Notes column follows the
+current voicing and range. It uses each chord's spelled tones, so Roman numerals
+inherit the key's spelling. The Degree column is a normalized functional label.
+Absolute chords are labeled best-effort relative to the selected key, using the root
+letter and accidental (not the nearest pitch class). Chromatic or ambiguous roots use
+a best-effort `b`/`#` label. The plugin highlights the row for the currently playing
+chord during playback.
 
 The table continues to show the last valid progression while the text is invalid.
 
 ### Errors and diagnostics
 
-Every parse error identifies the failing token, a zero-based character offset
-into the progression text, and a short message; the editor lists them below the
-learning table. If any token is invalid, no new plan is published: the last
-valid progression keeps playing, the table continues to show it, and export is
-disabled. See [SYNTAX.md](SYNTAX.md#6-errors-and-diagnostics) for the exact
-format and examples.
+Every parse error identifies the failing token, a zero-based character offset into
+the progression text, and a short message. The editor lists the errors below the
+learning table. If any token is invalid, no new plan is published. The last valid
+progression keeps playing, the table continues to show it, and export is disabled.
+See [SYNTAX.md](SYNTAX.md#6-errors-and-diagnostics) for the exact format and
+examples.
 
 ## Controls and saved state
 
@@ -241,25 +245,25 @@ format and examples.
 | Reveal last clip | — | Opens Explorer at the last drag file; enabled after a drag in this session |
 
 All notes are sent on MIDI channel 1. Root-position voicing places the root at the
-lowest octave that fits the range and stacks the remaining tones above it. Voice-led
-voicing keeps the first chord in root position and then chooses the inversion and
-octave placement that minimizes movement from the previous chord, staying within the
-selected range. Slash bass remains the lowest note in both modes. The upper voices
-contain each chord tone once. A slash bass may duplicate its pitch class an octave
-below the upper chord tones (for example, `C/E` sounds two E's); v1 has no other
-octave doubling.
+lowest octave that fits the range. It stacks the remaining tones above the root.
+Voice-led voicing keeps the first chord in root position. It then chooses the
+inversion and octave placement that minimizes movement from the previous chord, and
+stays within the selected range. Slash bass remains the lowest note in both modes.
+The upper voices contain each chord tone once. A slash bass may duplicate its pitch
+class an octave below the upper chord tones (for example, `C/E` sounds two E's). v1
+has no other octave doubling.
 
 The project state saves the progression text, key, mode, voicing, range, velocity,
-and loop setting through stable parameter IDs (`key`, `mode`, `voicing`, `range`,
+and loop setting. It uses stable parameter IDs (`key`, `mode`, `voicing`, `range`,
 `velocity`, `loop`) plus the `progressionText` property. Restoring a project rebuilds
-the plan but does not start playback. Hosts are expected to restore state on the
-message thread; if state is restored on another thread, the plan rebuild is deferred
-to the message queue.
+the plan but does not start playback. Hosts must restore state on the message thread.
+If a host restores state on another thread, the plugin defers the plan rebuild to the
+message queue.
 
 ## MIDI export
 
 Click **Export .mid** to write one complete loop of the current progression. Export
-is separate from dragging; unlike a drag file, an exported file always includes the
+is separate from dragging. Unlike a drag file, an exported file always includes the
 tempo and 4/4 time-signature metadata. The writer uses the same render plan as live
 playback:
 
@@ -271,40 +275,40 @@ playback:
 - deterministic event order with note-offs before note-ons at the same tick;
 - channel 1 note events.
 
-`AudioPlayHead::getPosition()` is only valid inside `processBlock`, so the processor
-caches the last valid host tempo in an atomic and export never queries the playhead.
-Export therefore still works with no playhead, at 120 BPM until the host has
+`AudioPlayHead::getPosition()` is only valid inside `processBlock`. The processor
+therefore caches the last valid host tempo in an atomic. Export never queries the
+playhead. Export still works with no playhead, at 120 BPM until the host has
 processed a block.
 
-The button is disabled when the text has errors or the progression is empty, and
-while a file chooser is already open. Export runs on the message thread and appends
-`.mid` if the chosen filename lacks it. The status line reports the file name or the
-failure reason.
+The button is disabled when the text has errors or the progression is empty. It is
+also disabled while a file chooser is open. Export runs on the message thread. It
+appends `.mid` if the chosen filename lacks it. The status line reports the file name
+or the failure reason.
 
 Export retains the tempo event (the last observed host tempo, or 120 BPM) and the
-4/4 time signature; only the drag path omits them.
+4/4 time signature. Only the drag path omits them.
 
 ## Dragging clips into a DAW
 
-The editor contains a clip-shaped **Drag to DAW** preview. It shows the loop length,
-for example `16 beats · 4 bars (4/4)`, computed as the sum of the chord durations.
-A left-button drag starts only after a small mouse movement, so a click does not
+The editor contains a clip-shaped **Drag to DAW** preview. It shows the loop length
+as the sum of the chord durations, for example `16 beats · 4 bars (4/4)`. A
+left-button drag starts only after a small mouse movement. A click therefore does not
 create a file.
 
 The preview is enabled after the last successful parse, when that plan contains at
-least one note. While a debounced edit is pending it reflects the last parsed text,
-not the characters just typed. An empty progression also disables the preview.
-While it is disabled it shows `Fix errors to drag`, or
-`Enter a progression to drag` when the progression is empty. Starting a drag forces
-a parse of the current text first, using the same path as Regenerate. If parsing
-fails, no file is created and the diagnostics are shown.
+least one note. While a debounced edit is pending, the preview shows the last parsed
+text, not the characters just typed. An empty progression also disables the preview.
+While the preview is disabled, it shows `Fix errors to drag`, or
+`Enter a progression to drag` when the progression is empty. A drag start first
+forces a parse of the current text, on the same path as Regenerate. If parsing fails,
+no file is created and the diagnostics are shown.
 
 A drag writes exactly one loop cycle at the current key, mode, voicing, range, and
 velocity settings. The file uses the same notes, 960 ticks per quarter note, MIDI
 channel 1, track name `Chord Text`, and note-off-before-note-on ordering as live
 playback and export. It deliberately contains **no tempo meta event and no
-time-signature meta event**, so the DAW's project tempo and meter govern the clip.
-If the host instead assumes 120 BPM, that is a host-behaviour risk noted below.
+time-signature meta event**. The DAW's project tempo and meter therefore govern the
+clip. If the host instead assumes 120 BPM, that is a host-behaviour risk noted below.
 
 ### File location and lifetime
 
@@ -314,57 +318,56 @@ Drag files are written to:
 Documents\ChordText\Clips
 ```
 
-The folder is created if missing. Each file is named
-`ChordText-YYYYMMDD-HHMMSS.mid` using local time, so repeated drags do not
-overwrite earlier clips. If two drags happen in the same second, a numeric suffix is
-added to the timestamped name instead of overwriting the existing file. Files are
-never deleted automatically in v1: a clip may already be referenced by a saved DAW
-project, and removing its source would break that project.
+The plugin creates the folder if it is missing. Each file is named
+`ChordText-YYYYMMDD-HHMMSS.mid` using local time, so repeated drags do not overwrite
+earlier clips. If two drags happen in the same second, the plugin adds a numeric
+suffix to the timestamped name instead of overwriting the existing file. Files are
+never deleted automatically in v1. A clip may already be referenced by a saved DAW
+project, and removal of its source would break that project.
 
 ### Fallback: Reveal last clip
 
 Every started drag leaves a real file in the clips folder, whether or not the DAW
-accepts the drop. The plugin cannot detect whether the drop succeeded, so the status
-line reports the saved filename and that the drag was requested, for example
-`Clip saved: ChordText-20261022-143015.mid; drag requested.` If the drag could not be
-queued, it reports
+accepts the drop. The plugin cannot detect whether the drop succeeded. The status
+line therefore reports the saved filename and that the plugin requested the drag, for
+example `Clip saved: ChordText-20261022-143015.mid; drag requested.` If the drag
+could not be queued, it reports
 `Clip saved: ChordText-20261022-143015.mid; drag could not be queued.` Neither
 message claims that the DAW accepted the drop.
 
-**Reveal last clip** sits next to **Export .mid**. It is enabled once a drag file has
-been created in the current plugin session and opens Explorer with that file
-selected. The last drag path is session-only and is not saved with the project, so
-Reveal starts disabled after reloading even if earlier clip files still exist in the
-folder. If Bitwig ignores the external drag, click Reveal last clip and drag the file
-from Explorer into Bitwig.
+**Reveal last clip** is next to **Export .mid**. It is enabled once a drag file has
+been created in the current plugin session. It opens Explorer with that file
+selected. The last drag path is session-only and is not saved with the project.
+Reveal therefore starts disabled after reloading, even if earlier clip files still
+exist in the folder. If Bitwig ignores the external drag, click Reveal last clip and
+drag the file from Explorer into Bitwig.
 
 ### Bitwig notes
 
-Bitwig receives the plugin as a VST3 MIDI generator; load the plugin, then route
-its MIDI output to an instrument as usual. The drag writes a file and starts an
-operating-system file drag. It does not create a Bitwig clip through a native API,
-because a VST3 plugin has no such API and Bitwig does not expose one for this
-workflow. The resulting clip should follow the Bitwig project tempo because the file
-has no tempo event. This behaviour is host-dependent and has not been verified here;
-use the checklist below.
+Bitwig receives the plugin as a VST3 MIDI generator. Load the plugin, then route its
+MIDI output to an instrument as usual. The drag writes a file and starts an
+operating-system file drag. It does not create a Bitwig clip through a native API. A
+VST3 plugin has no such API, and Bitwig does not expose one for this workflow. The
+resulting clip should follow the Bitwig project tempo because the file has no tempo
+event. This behaviour is host-dependent and has not been verified here. Use the
+checklist below.
 
 ## Command-line utility
 
-The build also produces a standalone console program,
-`build/Cli/chordtext-cli.exe`, that parses a progression and reports what the plugin
-would do — without a DAW, a VST3 host, or JUCE. It supports one-shot checks, piped
-stdin, and an interactive REPL, and it can write a Standard MIDI File through the
-same shared writer as the plugin.
+The build also produces a standalone console program, `build/Cli/chordtext-cli.exe`.
+It parses a progression and reports what the plugin would do — without a DAW, a VST3
+host, or JUCE. It supports one-shot checks, piped stdin, and an interactive REPL. It
+can also write a Standard MIDI File through the same shared writer as the plugin.
 
 ```text
 chordtext-cli [options] [progression]
 ```
 
 There is at most one positional argument, the progression text. With a progression
-argument the utility runs once and exits; stdin is ignored. With no argument and a
-non-interactive (piped) stdin it reads all of stdin as the progression. With no
-argument and an interactive terminal it starts the REPL. `--` ends option parsing,
-so a progression beginning with `-` is taken literally.
+argument, the utility runs once and exits. It ignores stdin. With no argument and a
+non-interactive (piped) stdin, it reads all of stdin as the progression. With no
+argument and an interactive terminal, it starts the REPL. `--` ends option parsing,
+so a progression that begins with `-` is taken literally.
 
 One-shot:
 
@@ -400,7 +403,7 @@ Error at character 6: unknown extension "9" (C99)
 (exit code 1)
 
 REPL (interactive terminal only): run `chordtext-cli` with no arguments. The banner
-prints the current settings and the prompt is `chord> `; a session looks like:
+prints the current settings, and the prompt is `chord> `. A session looks like:
 
 ```text
 Chord Text CLI — :help for commands
@@ -433,17 +436,17 @@ The full command list is under [REPL](#repl).
 | `--out <path>` | file path | off |
 | `--help` | flag | — |
 
-Defaults are the plugin's defaults. `--bpm` only affects a written MIDI file; it is
-reported in JSON but has no effect on the table. Options accept both `--name value`
-and `--name=value`, except boolean flags, which reject an attached value. If an
-option is repeated, the last occurrence wins. Unknown options, missing values, and
-invalid values are usage errors.
+Defaults are the plugin's defaults. `--bpm` only affects a written MIDI file. It is
+reported in JSON, but it has no effect on the table. Options accept both
+`--name value` and `--name=value`. Boolean flags are the exception: they reject an
+attached value. If an option is repeated, the last occurrence wins. Unknown options,
+missing values, and invalid values are usage errors.
 
 ### Human output
 
-A successful report prints a `Progression:` header (with runs of whitespace and
-newlines collapsed to single spaces, or `(empty)` for empty text), a settings line,
-and a table:
+A successful report prints a `Progression:` header, a settings line, and a table. The
+header collapses runs of whitespace and newlines to single spaces, or shows `(empty)`
+for empty text.
 
 ```text
 Progression: Cmaj7, Am7, Dm7, G7
@@ -457,12 +460,12 @@ G7     V7      G B D F  4      43 47 50 53
 ```
 
 Columns are left-aligned with two spaces between them. The `Notes` column follows
-the current voicing, matching the plugin's learning table, so an inversion appears
-in voicing order and a slash bass may repeat a pitch class. The `MIDI` column is the
-same voicing as space-separated MIDI note numbers after voicing, range, and slash
-bass are applied. `Beats` uses compact formatting: integral values omit the decimal
-point (for example `4`, `1.5`). An empty progression is valid and prints
-`Empty progression (no chords).`.
+the current voicing and matches the plugin's learning table. An inversion therefore
+appears in voicing order, and a slash bass may repeat a pitch class. The `MIDI`
+column is the same voicing as space-separated MIDI note numbers, after the plugin
+applies the voicing, range, and slash bass. `Beats` uses compact formatting: integral
+values omit the decimal point (for example `4`, `1.5`). An empty progression is valid
+and prints `Empty progression (no chords).`.
 
 Diagnostics replace the table and use the editor's exact wording, one error per line
 with the token's character offset:
@@ -477,7 +480,7 @@ Error at character 6: unknown extension "9" (C99)
 ```
 
 The count line is `1 error:` or `N errors:`. The parenthetical token is omitted when
-the token is empty. The CLI reports only the current input; it never shows a stale
+the token is empty. The CLI reports only the current input. It never shows a stale
 table from an earlier valid progression.
 
 ### Exit codes
@@ -488,17 +491,17 @@ table from an earlier valid progression.
 | 1 | The progression has parse errors |
 | 2 | Usage error, or a requested file could not be written |
 
-In one-shot mode results go to stdout and usage errors to stderr. I/O errors go to
-stderr in human mode and into the JSON `error` field in JSON mode. A REPL session
+In one-shot mode, results go to stdout and usage errors go to stderr. I/O errors go
+to stderr in human mode, and into the JSON `error` field in JSON mode. A REPL session
 always exits 0, even after earlier parse errors.
 
 ### REPL
 
 Running `chordtext-cli` with no arguments in an interactive terminal starts a REPL.
-The banner prints a current-settings line and a hint to use `:help`, and the prompt
-is `chord> `. Settings stay sticky across lines until changed. A non-empty line that
-does not start with `:` is parsed as a progression and reported with the current
-settings; a blank line is ignored; a parse error does not exit the REPL.
+The banner prints a current-settings line and a hint to use `:help`. The prompt is
+`chord> `. Settings stay sticky across lines until you change them. A non-empty line
+that does not start with `:` is parsed as a progression and reported with the current
+settings. The REPL ignores a blank line. A parse error does not exit the REPL.
 
 | Command | Behaviour |
 |---|---|
@@ -513,7 +516,7 @@ settings; a blank line is ignored; a parse error does not exit the REPL.
 | `:help` | List commands and current settings |
 | `:quit`, `:q` | Exit |
 
-After a successful setting change the command prints the current-settings line; an
+After a successful setting change, the command prints the current-settings line. An
 invalid command or value prints a short error and keeps the previous value. `:export`
 with no valid progression yet prints an error and writes nothing. EOF (Ctrl+Z on
 Windows) exits the REPL. Command feedback goes to stderr and progression reports go
@@ -554,7 +557,7 @@ newline:
 }
 ```
 
-This example was generated with `--voicing root-position --range C2-C5`; the default
+This example was generated with `--voicing root-position --range C2-C5`. The default
 settings produce `voice-led` and `C3-C6` (and the corresponding `voicing` numbers)
 instead.
 
@@ -575,34 +578,34 @@ Field meanings:
 - `midiFile` is an absolute path string after a successful write, otherwise `null`.
 - `error` is a string for a file I/O or empty-export failure, otherwise `null`.
 
-Strings are escaped per JSON and numbers are locale-independent. Whitespace and
-indentation are not part of the contract; consumers must parse the document. In JSON
-mode no human result text is written to stdout; usage errors remain human-readable
-on stderr.
+Strings are escaped per JSON, and numbers are locale-independent. Whitespace and
+indentation are not part of the contract. Consumers must parse the document. In JSON
+mode, the tool writes no human result text to stdout. Usage errors remain
+human-readable on stderr.
 
 ### Writing MIDI files
 
 `--out <path>` (one-shot or piped mode) and `:export <path>` (REPL) write one loop
-of the current progression as a Standard MIDI File, using the same shared writer as
-the plugin's export: 4/4 time signature, tempo from `--bpm` (default 120), track
+of the current progression as a Standard MIDI File. They use the same shared writer
+as the plugin's export: 4/4 time signature, tempo from `--bpm` (default 120), track
 name `Chord Text`, 960 ticks per quarter note, channel 1, and note-offs before
-note-ons at equal ticks. `--out` requires a progression argument or piped input;
-using it to start an interactive REPL is a usage error — use `:export` there.
+note-ons at equal ticks. `--out` requires a progression argument or piped input.
+Using it to start an interactive REPL is a usage error — use `:export` there.
 
-If the path does not already end in `.mid` (case-insensitive), its final extension is
-replaced with `.mid`; a path with no extension gains one. Relative paths resolve
-against the current working directory, and the success line (and JSON `midiFile`)
+If the path does not already end in `.mid` (case-insensitive), the tool replaces its
+final extension with `.mid`. A path with no extension gains one. Relative paths
+resolve against the current working directory. The success line (and JSON `midiFile`)
 report the absolute path. `:export` re-parses the last valid text with the current
 settings, so the written file always matches what a report would show now. Writing to
-an empty progression fails with exit code 2 in one-shot mode; the error goes to
-stderr (or the JSON `error` field) and no `Wrote` line is printed.
+an empty progression fails with exit code 2 in one-shot mode. The error goes to
+stderr (or the JSON `error` field), and the tool prints no `Wrote` line.
 
 ### Windows and UTF-8
 
 The utility is Windows x64 only, consistent with the project. It builds with `wmain`
-and converts command-line arguments to UTF-8, so chord tokens containing `°` or `ø`
+and converts command-line arguments to UTF-8, so chord tokens that contain `°` or `ø`
 survive the command line. It sets the console input and output code pages to UTF-8,
-so non-ASCII output displays correctly, and uses `std::filesystem::u8path` for
+so non-ASCII output displays correctly. It uses `std::filesystem::u8path` for
 user-supplied paths. All numeric formatting and parsing uses the classic locale.
 
 ## Tests
@@ -634,76 +637,74 @@ Or run the already-built executables directly:
 
 Each executable prints a summary such as `115 checks, 0 failures` for `TheoryTests`,
 `233 checks, 0 failures` for `ProcessorTests`, and `204 checks, 0 failures` for
-`CliTests`, and returns a non-zero exit code if any check fails. The build scripts
+`CliTests`. It returns a non-zero exit code if any check fails. The build scripts
 stop on the first failing suite. The build must produce no warnings from project
 code under JUCE's recommended warning flags.
 
 ## Licensing
 
-Chord Text links JUCE 8, which is available under the AGPLv3 or a commercial JUCE
+Chord Text links JUCE 8. JUCE 8 is available under the AGPLv3 or a commercial JUCE
 license. Personal learning use without distribution is permitted under the AGPLv3.
-Distributing a build requires a deliberate licensing decision: comply with the
-AGPLv3 or obtain a commercial JUCE license. This repository does not grant a separate
-license for its own source.
+Distribution of a build requires a deliberate licensing decision: comply with the
+AGPLv3, or obtain a commercial JUCE license. This repository does not grant a
+separate license for its own source.
 
 ## Known limitations and out-of-scope features
 
 Known limitations in v1:
 
-- Windows x64 only; there are no macOS or Linux builds.
-- Live generation requires host PPQ and tempo; without them the plugin stays silent
+- Windows x64 only. There are no macOS or Linux builds.
+- Live generation requires host PPQ and tempo. Without them, the plugin stays silent
   and does not free-run.
-- MIDI input is accepted for host compatibility but ignored.
+- The plugin accepts MIDI input for host compatibility, but ignores it.
 - Slash bass and applied chords (`V/V`) are unsupported on Roman numerals.
-- Parenthesised alterations are unsupported, and `Cb5`/`C#5` are read as root
-  accidentals before the `5` quality; see
+- Parenthesised alterations are unsupported. `Cb5` and `C#5` are read as root
+  accidentals before the `5` quality. See
   [SYNTAX.md](SYNTAX.md#36-root-accidental-precedence-cb5).
 - Each upper chord tone sounds once, but a slash bass may duplicate its pitch class
-  an octave below (for example, `C/E`). There is no other octave doubling and no
-  rootless voicing.
+  an octave below (for example, `C/E`). There is no other octave doubling, and there
+  is no rootless voicing.
 - The Degree column is best-effort for chromatic or ambiguous roots.
-- `prepareToPlay` queues note-offs for pitches that were sounding and emits them at
+- `prepareToPlay` queues note-offs for pitches that were sounding. It emits them at
   sample 0 of the next block. `releaseResources` cannot emit MIDI, so it only clears
-  internal note tracking; the host is expected to flush sounding notes when it
-  releases the plugin.
+  internal note tracking. The host must flush sounding notes when it releases the
+  plugin.
 - The plugin reuses the host MIDI buffer by clearing it first. JUCE's VST3 wrapper
-  normally preallocates enough capacity, but a zero-capacity host buffer may
-  allocate on the first `MidiBuffer::addEvent`; strict no-allocation depends on the
+  normally preallocates enough capacity. A zero-capacity host buffer, however, may
+  allocate on the first `MidiBuffer::addEvent`. Strict no-allocation depends on the
   host providing capacity.
 - Export uses the last tempo observed in `processBlock`. If a project is exported
   before the host has processed a block since loading, the file uses 120 BPM.
-- Bitwig may reject an external file drag from a VST3 plugin window. If the drop is
-  ignored, the file is still saved and **Reveal last clip** provides the fallback.
-  Direct drop acceptance has not been verified in this environment.
+- Bitwig may reject an external file drag from a VST3 plugin window. If Bitwig
+  ignores the drop, the file is still saved, and **Reveal last clip** provides the
+  fallback. Direct drop acceptance has not been verified in this environment.
 - A drag clip has no tempo event, so Bitwig's project tempo is expected to govern
-  playback. Bitwig may instead assume 120 BPM; this is host-dependent and
-  unverified.
+  playback. Bitwig may instead assume 120 BPM. This is host-dependent and unverified.
 - Dragging writes a new file on every attempt under `Documents\ChordText\Clips`.
   Files accumulate, and there is no automatic cleanup in v1.
 - There is no native Bitwig clip-creation API for a VST3 plugin. Chord Text writes
-  a `.mid` file and starts an OS drag; it does not create or edit a Bitwig clip
+  a `.mid` file and starts an OS drag. It does not create or edit a Bitwig clip
   directly.
 - The preview's bar count assumes 4/4 and is informational. The clip itself is
   beat-based, so a host in another meter can still use it.
 - The editor is a fixed 760×640. The increased height has not been checked in
   Bitwig's plugin window.
 - Host state restore is assumed to run on the message thread. If a host calls
-  `setStateInformation` on another thread, the plugin defers the plan rebuild to
-  the message queue, but the host is still responsible for serialising state
-  changes.
-- Only one progression is active at a time; there are no saved presets beyond the
+  `setStateInformation` on another thread, the plugin defers the plan rebuild to the
+  message queue. The host is still responsible for serialising state changes.
+- Only one progression is active at a time. There are no saved presets beyond the
   host project state.
 
 Command-line utility limitations:
 
 - Windows x64 only, consistent with the project.
-- No audio preview; the tool reports text and writes MIDI files only.
+- No audio preview. The tool reports text and writes MIDI files only.
 - The REPL is line-oriented with no history, editing, or completion.
 - `--bpm` defaults to 120 because there is no host tempo to observe.
 - JSON in the REPL is one document per report, interleaved with human command
-  feedback on stderr, so it is not a single JSON stream.
-- The shared writer replaces the JUCE export implementation; parity is guarded by
-  the existing read-back tests rather than a byte-for-byte comparison.
+  feedback on stderr. It is not a single JSON stream.
+- The shared writer replaces the JUCE export implementation. The existing read-back
+  tests guard parity, rather than a byte-for-byte comparison.
 
 Explicitly out of scope for v1:
 
@@ -721,9 +722,9 @@ Explicitly out of scope for v1:
 Automated tests cover parsing, voicing, transport, note lifecycle, state, MIDI
 export, Regenerate, the Beats column, the drag-file writer, and the clip-preview
 state. The following host checks require a VST3-compatible DAW and a human at the
-keyboard. They are documented here but were **not** performed as part of this
-repository's automated verification, so they remain unverified until someone runs
-them.
+keyboard. They are documented here, but they were **not** performed as part of this
+repository's automated verification. They therefore remain unverified until someone
+runs them.
 
 - [ ] Route **Chord Text** to an instrument and hear the default progression.
 - [ ] Change the text to `C, Cmaj7, Dmaj7, Emin9, Fmaj7` and confirm the notes.
@@ -763,7 +764,7 @@ them.
       and 4/4 metadata.
 
 `pluginval` is optional. If it is installed, run it against the built VST3 and fix
-anything that affects this plugin; it is not required to build or use Chord Text.
+anything that affects this plugin. It is not required to build or use Chord Text.
 
 ## Repository layout
 
