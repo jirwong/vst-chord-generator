@@ -104,7 +104,17 @@ bundle into the system VST3 folder:
 C:\Program Files\Common Files\VST3
 ```
 
-or leave it in the build tree and add the folder as a plugin search path:
+Or run the included installer from an Administrator Command Prompt:
+
+```bat
+install-vst3.bat
+```
+
+It copies the Release bundle from `build\ChordText_artefacts\Release\VST3` into
+`C:\Program Files\Common Files\VST3`. Close any DAW using the plugin before
+running it.
+
+Or leave it in the build tree and add the folder as a plugin search path:
 
 1. In the DAW's plugin settings, add
    `...\chord-generator\build\ChordText_artefacts\Release\VST3`
@@ -816,6 +826,7 @@ anything that affects this plugin. It is not required to build or use Chord Text
 CMakeLists.txt              plugin, test executables, JUCE subdirectory
 README.md                   this document
 SYNTAX.md                   canonical chord and progression syntax guide
+install-vst3.bat            copy the Release VST3 bundle to the system VST3 folder
 build.sh / build.bat        configure/build/test wrappers
 Source/Theory/              JUCE-free notes, keys, chords, parsers, voicing, render plan,
                             MIDI file writer
