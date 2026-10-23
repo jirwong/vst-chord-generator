@@ -100,6 +100,7 @@ void ChordSequenceComponent::CardContent::setRows (std::vector<LearningRow> newR
             if (rows[index].chord != newRows[index].chord
                 || rows[index].degree != newRows[index].degree
                 || rows[index].notes != newRows[index].notes
+                || rows[index].numericDegree != newRows[index].numericDegree
                 || rows[index].durationBeats != newRows[index].durationBeats)
             {
                 unchanged = false;
@@ -144,11 +145,12 @@ void ChordSequenceComponent::CardContent::paint (juce::Graphics& g)
         g.setColour (dimTextColour);
         g.setFont (juce::Font (juce::FontOptions (13.0f)));
         g.drawText (stale ? "Fix the progression above to build the sequence"
-                          : "Enter chord symbols or Roman numerals to preview the sequence",
+                          : "Enter numbers, chord symbols, or Roman numerals to preview the sequence",
                     getLocalBounds(), juce::Justification::centred, true);
         return;
     }
 
+    g.beginTransparencyLayer (stale ? 0.46f : 1.0f);
     for (std::size_t index = 0; index < rows.size(); ++index)
     {
         const auto column = static_cast<int> (index) % columnCount;
@@ -158,7 +160,6 @@ void ChordSequenceComponent::CardContent::paint (juce::Graphics& g)
                                           cardWidth, sequenceCardHeight).toFloat();
         const auto isCurrent = ! stale && static_cast<int> (index) == currentStep;
 
-        g.setOpacity (stale ? 0.46f : 1.0f);
         g.setColour (isCurrent ? activeCardColour : panelColour);
         g.fillRoundedRectangle (card, 9.0f);
         g.setColour (isCurrent ? accentColour : outlineColour);
@@ -174,11 +175,15 @@ void ChordSequenceComponent::CardContent::paint (juce::Graphics& g)
         auto titleRow = inner.removeFromTop (27);
         g.setColour (textColour);
         g.setFont (juce::Font (juce::FontOptions (18.0f, juce::Font::bold)));
-        g.drawFittedText (rows[index].chord, titleRow.removeFromLeft (titleRow.getWidth() - 52),
+        g.drawFittedText (rows[index].chord, titleRow,
                           juce::Justification::centredLeft, 1);
         g.setColour (dimTextColour);
         g.setFont (juce::Font (juce::FontOptions (11.0f)));
-        g.drawFittedText (rows[index].degree, titleRow, juce::Justification::centredRight, 1);
+        const auto analysis = rows[index].numericDegree > 0
+            ? "Degree " + juce::String (rows[index].numericDegree)
+                + juce::String::fromUTF8 (" \xc2\xb7 ") + rows[index].degree
+            : rows[index].degree;
+        g.drawFittedText (analysis, inner.removeFromTop (18), juce::Justification::centredLeft, 1);
 
         g.setColour (dimTextColour);
         g.setFont (juce::Font (juce::FontOptions (13.0f)));
@@ -191,7 +196,7 @@ void ChordSequenceComponent::CardContent::paint (juce::Graphics& g)
                     juce::Justification::bottomLeft, false);
     }
 
-    g.setOpacity (1.0f);
+    g.endTransparencyLayer();
 }
 
 ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProcessor& p)
@@ -206,10 +211,12 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     configureLabel (productLabel, "MIDI GENERATOR", dimTextColour, 11.0f);
     configureLabel (transportStatusLabel, {}, dimTextColour, 11.0f);
     configureLabel (progressionLabel, "PROGRESSION", dimTextColour, 11.0f);
-    configureLabel (progressionHintLabel, "Type chord symbols or Roman numerals",
+    configureLabel (progressionHintLabel, "Type numbers, chord symbols, or Roman numerals",
                     dimTextColour, 11.0f);
     configureLabel (keyLabel, "KEY", dimTextColour, 11.0f);
     configureLabel (modeLabel, "MODE", dimTextColour, 11.0f);
+    configureLabel (scaleSummaryLabel, {}, dimTextColour, 12.0f);
+    scaleSummaryLabel.setComponentID ("scaleSummary");
     configureLabel (voicingLabel, "VOICING", dimTextColour, 11.0f);
     configureLabel (rangeLabel, "RANGE", dimTextColour, 11.0f);
     configureLabel (velocityLabel, "VELOCITY", dimTextColour, 11.0f);
@@ -264,7 +271,8 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     };
 
     setUpCombo (keyBox, "key");
-    setUpCombo (modeBox, "mode");
+    setUpCombo (modeBox, "scaleMode");
+    modeBox.setComponentID ("modeBox");
     setUpCombo (voicingBox, "voicing");
     setUpCombo (rangeBox, "range");
 
@@ -356,6 +364,7 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     addAndMakeVisible (progressionEditor);
     addAndMakeVisible (keyLabel);
     addAndMakeVisible (modeLabel);
+    addAndMakeVisible (scaleSummaryLabel);
     addAndMakeVisible (voicingLabel);
     addAndMakeVisible (rangeLabel);
     addAndMakeVisible (velocityLabel);
@@ -373,7 +382,7 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     addAndMakeVisible (sequenceView);
 
     keyAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "key", keyBox);
-    modeAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "mode", modeBox);
+    modeAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "scaleMode", modeBox);
     voicingAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "voicing",
                                                              voicingBox);
     rangeAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "range", rangeBox);
@@ -455,14 +464,16 @@ void ChordTextAudioProcessorEditor::resized()
         x += width + gap;
     };
 
-    placeControl (keyLabel, keyBox, 145);
-    placeControl (modeLabel, modeBox, 150);
-    placeControl (voicingLabel, voicingBox, 165);
-    placeControl (rangeLabel, rangeBox, 125);
+    placeControl (keyLabel, keyBox, 120);
+    placeControl (modeLabel, modeBox, 185);
+    placeControl (voicingLabel, voicingBox, 160);
+    placeControl (rangeLabel, rangeBox, 115);
     const auto loopWidth = 60;
     const auto velocityWidth = std::max (80, controlFields.getRight() - x - loopWidth - gap);
     placeControl (velocityLabel, velocitySlider, velocityWidth);
     loopButton.setBounds (x, controlFields.getY(), loopWidth, controlFields.getHeight());
+    scaleSummaryLabel.setBounds (content.removeFromTop (22));
+    content.removeFromTop (4);
 
     constexpr int sequenceHeaderHeight = 40;
     constexpr int actionRowHeight = 44;
@@ -540,11 +551,11 @@ void ChordTextAudioProcessorEditor::startExport()
             juce::String error;
 
             if (safeThis->processor.exportMidiFile (file, error))
-        {
-            safeThis->latestOutputFile = file;
-            safeThis->lastRevealAvailable = true;
+            {
+                safeThis->latestOutputFile = file;
+                safeThis->lastRevealAvailable = true;
                 safeThis->lastExportStatus = "Exported " + file.getFileName();
-        }
+            }
             else
                 safeThis->lastExportStatus = "Export failed: " + error;
         }
@@ -556,6 +567,9 @@ void ChordTextAudioProcessorEditor::startExport()
 
 void ChordTextAudioProcessorEditor::refreshStatus()
 {
+    const auto scaleSummary = processor.getScaleSummary();
+    if (scaleSummaryLabel.getText() != scaleSummary)
+        scaleSummaryLabel.setText (scaleSummary, juce::dontSendNotification);
     const auto diagnostics = processor.getDiagnostics();
     const auto rows = processor.getLearningRows();
     const auto shouldShowDiagnostics = ! textEditPending && ! diagnostics.empty();
@@ -657,10 +671,10 @@ juce::String ChordTextAudioProcessorEditor::buildStatusText() const
                        : ! diagnostics.empty() ? juce::String ("Fix errors to prepare MIDI")
                        : rows.empty() ? juce::String ("No progression")
                                       : juce::String (static_cast<int> (rows.size()))
-                                            + " chords  Â·  MIDI ready";
+                                            + juce::String::fromUTF8 (" chords \xc2\xb7 MIDI ready");
 
     if (lastExportStatus.isNotEmpty())
-        text += "  Â·  " + lastExportStatus;
+        text += juce::String::fromUTF8 (" \xc2\xb7 ") + lastExportStatus;
 
     return text;
 }

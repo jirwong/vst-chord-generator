@@ -30,6 +30,10 @@ constexpr std::array<const char*, 17> keyNames {
 constexpr std::array<int, 3> rangeLowMidi { 36, 48, 60 };
 constexpr std::array<int, 3> rangeHighMidi { 72, 84, 96 };
 
+// Internal parameter echoes are synchronous on the calling thread. A thread-local
+// guard does not suppress a real automation event arriving on another thread.
+thread_local const ChordTextAudioProcessor* synchronizingProcessor = nullptr;
+
 double positiveFmod (double value, double modulus)
 {
     const auto remainder = std::fmod (value, modulus);
@@ -97,6 +101,7 @@ ChordTextAudioProcessor::ChordTextAudioProcessor()
 {
     apvts.addParameterListener ("key", this);
     apvts.addParameterListener ("mode", this);
+    apvts.addParameterListener ("scaleMode", this);
     apvts.addParameterListener ("voicing", this);
     apvts.addParameterListener ("range", this);
     apvts.addParameterListener ("velocity", this);
@@ -111,6 +116,7 @@ ChordTextAudioProcessor::~ChordTextAudioProcessor()
 
     apvts.removeParameterListener ("key", this);
     apvts.removeParameterListener ("mode", this);
+    apvts.removeParameterListener ("scaleMode", this);
     apvts.removeParameterListener ("voicing", this);
     apvts.removeParameterListener ("range", this);
     apvts.removeParameterListener ("velocity", this);
@@ -146,11 +152,25 @@ ChordTextAudioProcessor::createParameterLayout()
     layout.add (std::make_unique<juce::AudioParameterBool> (
         juce::ParameterID { "loop", 1 }, "Loop", true));
 
+    juce::StringArray scaleNames;
+    for (const auto mode : chordtext::allModes())
+        scaleNames.add (juce::String (chordtext::modeDisplayName (mode).data()));
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { "scaleMode", 1 }, "Scale Mode", scaleNames, 0));
+
     return layout;
 }
 
 void ChordTextAudioProcessor::parameterChanged (const juce::String& parameterID, float newValue)
 {
+    if (parameterID == "mode" || parameterID == "scaleMode")
+    {
+        if (synchronizingProcessor == this)
+            return;
+        const auto maximum = parameterID == "mode" ? 1 : 8;
+        effectiveScaleIndex.store (std::clamp (static_cast<int> (std::lround (newValue)), 0, maximum),
+                                   std::memory_order_relaxed);
+    }
     if (parameterID == "loop")
     {
         loopEnabled.store (newValue >= 0.5f, std::memory_order_relaxed);
@@ -162,7 +182,18 @@ void ChordTextAudioProcessor::parameterChanged (const juce::String& parameterID,
 
 void ChordTextAudioProcessor::handleAsyncUpdate()
 {
+    const auto selected = effectiveScaleIndex.load (std::memory_order_relaxed);
+    {
+        const juce::ScopedValueSetter<const ChordTextAudioProcessor*> guard (synchronizingProcessor, this);
+        auto* scale = apvts.getParameter ("scaleMode");
+        if (parameterIndex ("scaleMode") != selected)
+            scale->setValueNotifyingHost (scale->convertTo0to1 (static_cast<float> (selected)));
+        if (selected <= 1 && parameterIndex ("mode") != selected)
+            apvts.getParameter ("mode")->setValueNotifyingHost (static_cast<float> (selected));
+    }
     rebuildPlan();
+    if (effectiveScaleIndex.load (std::memory_order_relaxed) != selected)
+        triggerAsyncUpdate();
 }
 
 int ChordTextAudioProcessor::parameterIndex (const juce::String& parameterID) const
@@ -176,8 +207,8 @@ int ChordTextAudioProcessor::parameterIndex (const juce::String& parameterID) co
 chordtext::Key ChordTextAudioProcessor::selectedKey() const
 {
     const auto keyIndex = std::clamp (parameterIndex ("key"), 0, 16);
-    const auto mode = parameterIndex ("mode") == 1 ? chordtext::Mode::minor
-                                                    : chordtext::Mode::major;
+    const auto mode = chordtext::allModes()[static_cast<std::size_t> (
+        std::clamp (effectiveScaleIndex.load (std::memory_order_relaxed), 0, 8))];
 
     return { pitchClassFromName (keyNames[static_cast<std::size_t> (keyIndex)]), mode };
 }
@@ -206,6 +237,17 @@ std::vector<LearningRow> ChordTextAudioProcessor::getLearningRows() const
 int ChordTextAudioProcessor::getCurrentStep() const
 {
     return currentStep.load (std::memory_order_relaxed);
+}
+
+juce::String ChordTextAudioProcessor::getScaleSummary() const
+{
+    const auto key = selectedKey();
+    auto summary = juce::String (key.tonic().name()) + " "
+                 + juce::String (chordtext::modeDisplayName (key.mode()).data())
+                 + juce::String::fromUTF8 (" \xc2\xb7");
+    for (const auto& note : key.scaleNotes())
+        summary += " " + juce::String (note.name());
+    return summary;
 }
 
 void ChordTextAudioProcessor::rebuildPlan()
@@ -244,6 +286,7 @@ void ChordTextAudioProcessor::rebuildPlan()
         row.degree = chordtext::degreeLabel (step.chord, key);
         row.notes = chordtext::notesForVoicing (step.chord, voicings[index]);
         row.durationBeats = step.durationBeats;
+        row.numericDegree = step.numericDegree;
         learningRows.push_back (std::move (row));
     }
 }
@@ -752,6 +795,10 @@ void ChordTextAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     state.setProperty ("progressionText", getProgressionText(), nullptr);
+    const auto selected = effectiveScaleIndex.load (std::memory_order_relaxed);
+    state.getChildWithProperty ("id", "scaleMode").setProperty ("value", selected, nullptr);
+    if (selected <= 1)
+        state.getChildWithProperty ("id", "mode").setProperty ("value", selected, nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -764,10 +811,22 @@ void ChordTextAudioProcessor::setStateInformation (const void* data, int sizeInB
     if (xml == nullptr)
         return;
 
-    const auto tree = juce::ValueTree::fromXml (*xml);
+    auto tree = juce::ValueTree::fromXml (*xml);
 
     if (! tree.isValid() || ! tree.hasType (apvts.state.getType()))
         return;
+
+    auto scaleState = tree.getChildWithProperty ("id", "scaleMode");
+    if (! scaleState.isValid())
+    {
+        const auto legacy = tree.getChildWithProperty ("id", "mode");
+        scaleState = juce::ValueTree ("PARAM");
+        scaleState.setProperty ("id", "scaleMode", nullptr);
+        scaleState.setProperty ("value", std::clamp (static_cast<int> (legacy.getProperty ("value", 0)), 0, 1), nullptr);
+        tree.addChild (scaleState, -1, nullptr);
+    }
+    const auto selected = std::clamp (static_cast<int> (scaleState.getProperty ("value", 0)), 0, 8);
+    scaleState.setProperty ("value", selected, nullptr);
 
     // The plan rebuild owns message-thread-only state. Restoring state from a
     // host is expected on the message thread; if a host breaks that contract,
@@ -776,7 +835,11 @@ void ChordTextAudioProcessor::setStateInformation (const void* data, int sizeInB
     const auto onMessageThread = juce::MessageManager::existsAndIsCurrentThread();
 
     cancelPendingUpdate();
-    apvts.replaceState (tree);
+    {
+        const juce::ScopedValueSetter<const ChordTextAudioProcessor*> guard (synchronizingProcessor, this);
+        apvts.replaceState (tree);
+        effectiveScaleIndex.store (selected, std::memory_order_relaxed);
+    }
     cancelPendingUpdate();
 
     if (onMessageThread)

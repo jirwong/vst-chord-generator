@@ -1,9 +1,10 @@
-# Chord Text
+# Chordscript
 
-Chord Text is a Windows x64 VST3 MIDI generator. Type a chord progression as chord
-symbols or Roman numerals. The plugin plays it in sync with the host transport, or
+Chordscript is a Windows x64 VST3 MIDI generator. The host lists it as **Chord Text**.
+Type a chord progression as chord symbols, Roman numerals, or numbers from 1 to 7.
+The plugin plays it in sync with the host transport, or
 exports it as a Standard MIDI File. You can also drag one loop from the editor into
-a DAW such as Bitwig as a MIDI clip. The editor shows a learning table. The table
+a DAW such as Bitwig as a MIDI clip. The editor shows chord cards. Each card
 shows the functional degree, the spelled chord tones, and the duration of each
 chord in beats.
 
@@ -134,13 +135,13 @@ in the manual checklist below. It has **not** been verified in this environment.
    to apply the current text immediately.
 4. Use the key, mode, voicing, range, velocity, and loop controls to shape the
    output.
-5. Read the learning table for the degree, spelled notes, and duration of each
+5. Read the chord cards for the degree, spelled notes, and duration of each
    chord, then drag the clip preview into the DAW or export a `.mid` file.
 
 Live generation needs host playhead data with a PPQ position and tempo. The status
 line shows one of these messages:
 
-- `Transport ready` — the transport is playing.
+- `Transport playing` — the transport is playing.
 - `Transport stopped` — a playhead position exists, but the transport is not
   playing.
 - `No transport available` — the host supplies no usable position.
@@ -187,6 +188,8 @@ Cmaj7, Am7, Dm7, G7
 i-iv-V
 C:8, Am7:4, F:4, G:4
 C/E, F#m7b5/C
+1, 6, 4, 5
+1(7), 2(7), 5(7):8
 ```
 
 Every chord lasts 4 beats by default. Separators can be mixed. You can use absolute
@@ -194,8 +197,18 @@ chords and Roman numerals in the same progression. The plugin editor and
 `chordtext-cli` share the parser, so the same text produces the same result in both.
 To check syntax without a DAW, run `chordtext-cli "C, H"`.
 
-The key selector matters for Roman numerals and the Degree column. It does not
+The key selector matters for Roman numerals, numeric chords, and degree labels. It does not
 transpose absolute chords.
+
+Numbers select chords from the chosen scale. In C Major, `2` is Dm and `2(7)` is
+Dm7. In A Minor, `5` is Em. Use `5maj` for E or `5dom7` for E7.
+Separate the degrees: `1-6-4-5` is valid, but `1645` is invalid.
+
+The Mode selector supports Major (Ionian), Minor (Aeolian), Dorian, Phrygian,
+Lydian, Mixolydian, Locrian, Harmonic Minor, and Melodic Minor. Melodic Minor
+always uses its ascending form. The scale summary shows the current tonic and
+seven scale notes. See [numeric syntax](SYNTAX.md#52-numeric-scale-chords) and
+[quality overrides](SYNTAX.md#53-explicit-numeric-chord-quality) for examples.
 
 ### The learning table
 
@@ -215,17 +228,18 @@ current voicing and range. It uses each chord's spelled tones, so Roman numerals
 inherit the key's spelling. The Degree column is a normalized functional label.
 Absolute chords are labeled best-effort relative to the selected key, using the root
 letter and accidental (not the nearest pitch class). Chromatic or ambiguous roots use
-a best-effort `b`/`#` label. The plugin highlights the row for the currently playing
+a best-effort `b`/`#` label. The plugin highlights the card for the currently playing
 chord during playback.
 
-The table continues to show the last valid progression while the text is invalid.
+Numeric cards also show the numeric degree, for example `Degree 2 · ii7`.
+Cards show the last valid progression with reduced brightness while input is invalid.
 
 ### Errors and diagnostics
 
 Every parse error identifies the failing token, a zero-based character offset into
-the progression text, and a short message. The editor lists the errors below the
-learning table. If any token is invalid, no new plan is published. The last valid
-progression keeps playing, the table continues to show it, and export is disabled.
+the progression text, and a short message. The editor lists errors below the
+progression input. If any token is invalid, no new plan is published. The last valid
+progression keeps playing. Its cards stay visible, and export and drag are disabled.
 See [SYNTAX.md](SYNTAX.md#6-errors-and-diagnostics) for the exact format and
 examples.
 
@@ -236,13 +250,13 @@ examples.
 | Progression text | `Cmaj7, Am7, Dm7, G7` | Multi-line, parsed 150 ms after the last edit |
 | Regenerate | — | Parses the current text and rebuilds immediately |
 | Key | C | 17 tonic spellings |
-| Mode | Major | Major or minor |
+| Mode | Major (Ionian) | Nine scales; see the syntax guide |
 | Voicing | Voice-led | Voice-led or Root position |
 | Range | C3–C6 | C2–C5, C3–C6, or C4–C7 |
 | Velocity | 100 | 1–127 |
 | Loop | On | On or off |
 | Drag to DAW | — | Drags one loop as a `.mid` file; enabled for valid, non-empty progressions |
-| Reveal last clip | — | Opens Explorer at the last drag file; enabled after a drag in this session |
+| Reveal file | — | Opens Explorer at the most recent successful export or drag file |
 
 All notes are sent on MIDI channel 1. Root-position voicing places the root at the
 lowest octave that fits the range. It stacks the remaining tones above the root.
@@ -255,14 +269,19 @@ has no other octave doubling.
 
 The project state saves the progression text, key, mode, voicing, range, velocity,
 and loop setting. It uses stable parameter IDs (`key`, `mode`, `voicing`, `range`,
-`velocity`, `loop`) plus the `progressionText` property. Restoring a project rebuilds
+`velocity`, `loop`, `scaleMode`) plus the `progressionText` property. Restoring a project rebuilds
 the plan but does not start playback. Hosts must restore state on the message thread.
 If a host restores state on another thread, the plugin defers the plan rebuild to the
 message queue.
 
+The editor's Mode selector uses the new host parameter **Scale Mode** (`scaleMode`).
+Use this parameter to automate all nine scales. The original **Mode** parameter
+keeps its two Major/Minor values for existing automation. Old projects restore
+their original selection. New projects save the nine-choice selection.
+
 ## MIDI export
 
-Click **Export .mid** to write one complete loop of the current progression. Export
+Click **Export MIDI** to write one complete loop of the current progression. Export
 is separate from dragging. Unlike a drag file, an exported file always includes the
 tempo and 4/4 time-signature metadata. The writer uses the same render plan as live
 playback:
@@ -427,7 +446,7 @@ The full command list is under [REPL](#repl).
 | Option | Values | Default |
 |---|---|---|
 | `--key <tonic>` | `C C# Db D D# Eb E F F# Gb G G# Ab A A# Bb B`, case-insensitive | `C` |
-| `--mode <major\|minor>` | case-insensitive | `major` |
+| `--mode <mode>` | Nine scale names; case-insensitive; `ionian`/`aeolian` aliases | `major` |
 | `--voicing <voice-led\|root-position>` | case-insensitive; `root` is an alias for `root-position` | `voice-led` |
 | `--range <C2-C5\|C3-C6\|C4-C7>` | case-insensitive | `C3-C6` |
 | `--velocity <1-127>` | integer | `100` |
@@ -506,7 +525,7 @@ settings. The REPL ignores a blank line. A parse error does not exit the REPL.
 | Command | Behaviour |
 |---|---|
 | `:key <tonic>` | Set the key tonic; same validation as `--key` |
-| `:mode <major\|minor>` | Set the mode |
+| `:mode <mode>` | Set one of the nine scales |
 | `:voicing <voice-led\|root-position>` | Set the voicing mode |
 | `:range <C2-C5\|C3-C6\|C4-C7>` | Set the pitch range |
 | `:velocity <1-127>` | Set the velocity |
@@ -687,7 +706,7 @@ Known limitations in v1:
   directly.
 - The preview's bar count assumes 4/4 and is informational. The clip itself is
   beat-based, so a host in another meter can still use it.
-- The editor is a fixed 760×640. The increased height has not been checked in
+- The editor is a fixed 960×650. Its size has not been checked in
   Bitwig's plugin window.
 - Host state restore is assumed to run on the message thread. If a host calls
   `setStateInformation` on another thread, the plugin defers the plan rebuild to the
