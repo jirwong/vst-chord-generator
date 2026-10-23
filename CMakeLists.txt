@@ -35,6 +35,7 @@ set(CLI_CORE_SOURCES
     Source/Cli/CliSession.cpp)
 set(PLUGIN_SOURCES
     Source/Plugin/UiSettings.cpp
+    Source/Plugin/ChordPreview.cpp
     Source/Plugin/PluginProcessor.cpp
     Source/Plugin/PluginEditor.cpp
     Source/Plugin/ClipDragComponent.cpp)
@@ -67,6 +68,7 @@ target_link_libraries(ChordText PRIVATE
 juce_add_console_app(ProcessorTests PRODUCT_NAME "ProcessorTests")
 target_sources(ProcessorTests PRIVATE
     Tests/ProcessorTest.cpp
+    Tests/ChordPreviewChecks.cpp
     ${PLUGIN_SOURCES}
     ${THEORY_SOURCES})
 target_include_directories(ProcessorTests PRIVATE Source)

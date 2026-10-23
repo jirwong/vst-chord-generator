@@ -174,9 +174,25 @@ void ChordTextAudioProcessor::parameterChanged (const juce::String& parameterID,
     if (parameterID == "loop")
     {
         loopEnabled.store (newValue >= 0.5f, std::memory_order_relaxed);
+        // Loop changes reuse the voicing snapshot but still end any gesture.
+        cancelChordPreview();
         return;
     }
 
+    const auto requiresRebuiltVoicings = parameterID == "key"
+                                         || parameterID == "mode"
+                                         || parameterID == "scaleMode"
+                                         || parameterID == "voicing"
+                                         || parameterID == "range"
+                                         || parameterID == "velocity";
+
+    if (requiresRebuiltVoicings)
+    {
+        planRebuildPending.store (true, std::memory_order_release);
+        previewDataRevision.fetch_add (1, std::memory_order_acq_rel);
+    }
+
+    cancelChordPreview();
     triggerAsyncUpdate();
 }
 
@@ -250,8 +266,170 @@ juce::String ChordTextAudioProcessor::getScaleSummary() const
     return summary;
 }
 
+std::uint64_t ChordTextAudioProcessor::getPreviewCardRevision() const noexcept
+{
+    if (previewInputPending || previewCacheRevision == 0 || previewPitchMasks.empty())
+        return 0;
+
+    if (previewCacheRevision != previewDataRevision.load (std::memory_order_acquire))
+        return 0;
+
+    return previewCacheRevision;
+}
+
+bool ChordTextAudioProcessor::isPlanRebuildPending() const noexcept
+{
+    return planRebuildPending.load (std::memory_order_acquire);
+}
+
+bool ChordTextAudioProcessor::isPreviewCardEligible (int stepIndex,
+                                                     std::uint64_t displayedRevision) const noexcept
+{
+    if (previewInputPending || displayedRevision == 0 || displayedRevision != previewCacheRevision)
+        return false;
+
+    if (previewCacheRevision != previewDataRevision.load (std::memory_order_acquire))
+        return false;
+
+    return stepIndex >= 0 && static_cast<std::size_t> (stepIndex) < previewPitchMasks.size();
+}
+
+chordscript::PreviewRequest ChordTextAudioProcessor::makeIdlePreviewRequest() const noexcept
+{
+    chordscript::PreviewRequest request;
+    request.mode = chordscript::PreviewMode::idle;
+    request.cancellationEpoch = previewCancellationEpoch.load (std::memory_order_acquire);
+    request.dataRevision = previewDataRevision.load (std::memory_order_acquire);
+    return request;
+}
+
+void ChordTextAudioProcessor::publishPreviewRequest (const chordscript::PreviewRequest& request)
+{
+    desiredPreviewRequest = request;
+    previewExchange.publishRequest (request);
+}
+
+chordscript::PreviewGestureId ChordTextAudioProcessor::beginMomentaryPreview (
+    int stepIndex, std::uint64_t displayedRevision)
+{
+    if (! isPreviewCardEligible (stepIndex, displayedRevision))
+        return 0;
+
+    const auto gestureId = nextPreviewGestureId++;
+    if (nextPreviewGestureId == 0)
+        nextPreviewGestureId = 1;
+
+    chordscript::PreviewRequest request;
+    request.mode = chordscript::PreviewMode::momentary;
+    request.stepIndex = stepIndex;
+    request.gestureId = gestureId;
+    request.cancellationEpoch = previewCancellationEpoch.load (std::memory_order_acquire);
+    request.dataRevision = previewCacheRevision;
+    request.pitches = previewPitchMasks[static_cast<std::size_t> (stepIndex)];
+    request.velocity = previewVelocity;
+    publishPreviewRequest (request);
+    return gestureId;
+}
+
+void ChordTextAudioProcessor::endMomentaryPreview (chordscript::PreviewGestureId gestureId)
+{
+    if (desiredPreviewRequest.mode == chordscript::PreviewMode::momentary
+        && desiredPreviewRequest.gestureId == gestureId)
+    {
+        publishPreviewRequest (makeIdlePreviewRequest());
+    }
+}
+
+void ChordTextAudioProcessor::toggleHeldPreview (int stepIndex, std::uint64_t displayedRevision)
+{
+    if (previewInputPending)
+        return;
+
+    const auto epoch = previewCancellationEpoch.load (std::memory_order_acquire);
+    if (desiredPreviewRequest.mode == chordscript::PreviewMode::held
+        && desiredPreviewRequest.cancellationEpoch == epoch
+        && desiredPreviewRequest.dataRevision == previewCacheRevision
+        && desiredPreviewRequest.stepIndex == stepIndex)
+    {
+        publishPreviewRequest (makeIdlePreviewRequest());
+        return;
+    }
+
+    if (! isPreviewCardEligible (stepIndex, displayedRevision))
+        return;
+
+    const auto gestureId = nextPreviewGestureId++;
+    if (nextPreviewGestureId == 0)
+        nextPreviewGestureId = 1;
+
+    chordscript::PreviewRequest request;
+    request.mode = chordscript::PreviewMode::held;
+    request.stepIndex = stepIndex;
+    request.gestureId = gestureId;
+    request.cancellationEpoch = epoch;
+    request.dataRevision = previewCacheRevision;
+    request.pitches = previewPitchMasks[static_cast<std::size_t> (stepIndex)];
+    request.velocity = previewVelocity;
+    publishPreviewRequest (request);
+}
+
+chordscript::PreviewFeedback ChordTextAudioProcessor::getPreviewFeedback()
+{
+    const auto epoch = previewCancellationEpoch.load (std::memory_order_acquire);
+    const auto revision = previewDataRevision.load (std::memory_order_acquire);
+
+    chordscript::PreviewFeedback incoming;
+    if (previewExchange.readLatestFeedback (incoming)
+        && incoming.cancellationEpoch == epoch
+        && incoming.dataRevision == revision)
+    {
+        cachedPreviewFeedback = incoming;
+    }
+
+    if (cachedPreviewFeedback.cancellationEpoch != epoch
+        || cachedPreviewFeedback.dataRevision != revision)
+    {
+        cachedPreviewFeedback = {};
+        cachedPreviewFeedback.cancellationEpoch = epoch;
+        cachedPreviewFeedback.dataRevision = revision;
+    }
+
+    return cachedPreviewFeedback;
+}
+
+void ChordTextAudioProcessor::cancelChordPreview() noexcept
+{
+    previewCancellationEpoch.fetch_add (1, std::memory_order_acq_rel);
+}
+
+void ChordTextAudioProcessor::setPreviewInputPending (bool pending)
+{
+    if (previewInputPending == pending)
+        return;
+
+    previewInputPending = pending;
+
+    if (pending)
+        cancelChordPreview();
+}
+
+void ChordTextAudioProcessor::publishPreviewFeedback (
+    const chordscript::PreviewRequest& request)
+{
+    previewExchange.publishFeedback (chordscript::makePreviewFeedback (request));
+}
+
 void ChordTextAudioProcessor::rebuildPlan()
 {
+    // Every rebuild invalidates the old preview snapshot. The revision capture
+    // below keeps a cache published by an older rebuild from becoming eligible.
+    const auto revision = previewDataRevision.fetch_add (1, std::memory_order_acq_rel) + 1;
+    previewCacheRevision = 0;
+    previewPitchMasks.clear();
+    previewVelocity = 100;
+    planRebuildPending.store (false, std::memory_order_release);
+    cancelChordPreview();
+
     const auto key = selectedKey();
     const auto parsed = chordtext::parseProgression (getProgressionText().toStdString(), key);
 
@@ -274,6 +452,23 @@ void ChordTextAudioProcessor::rebuildPlan()
     const auto velocity = std::clamp (parameterIndex ("velocity"), 1, 127);
 
     publishPlan (chordtext::buildRenderPlan (progression, voicings, velocity));
+
+    // Only a coherent rebuild may refresh the preview cache.
+    if (previewDataRevision.load (std::memory_order_acquire) == revision)
+    {
+        previewPitchMasks.assign (voicings.size(), std::array<std::uint64_t, 2> {});
+        for (std::size_t index = 0; index < voicings.size(); ++index)
+        {
+            for (const auto pitch : voicings[index])
+            {
+                const auto clamped = std::clamp (pitch, 0, 127);
+                previewPitchMasks[index][static_cast<std::size_t> (clamped / 64)]
+                    |= std::uint64_t { 1 } << (clamped % 64);
+            }
+        }
+        previewVelocity = velocity;
+        previewCacheRevision = revision;
+    }
 
     learningRows.clear();
     learningRows.reserve (progression.steps.size());
@@ -352,6 +547,15 @@ bool ChordTextAudioProcessor::exportMidiFile (const juce::File& file,
 
 juce::File ChordTextAudioProcessor::createDragClipFile (juce::String& errorMessage)
 {
+    const auto folder = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                            .getChildFile ("ChordText")
+                            .getChildFile ("Clips");
+    return createDragClipFile (errorMessage, folder);
+}
+
+juce::File ChordTextAudioProcessor::createDragClipFile (juce::String& errorMessage,
+                                                        const juce::File& folder)
+{
     errorMessage.clear();
 
     if (! diagnostics.empty())
@@ -365,10 +569,6 @@ juce::File ChordTextAudioProcessor::createDragClipFile (juce::String& errorMessa
         errorMessage = "Cannot create a clip for an empty progression.";
         return {};
     }
-
-    const auto folder = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
-                            .getChildFile ("ChordText")
-                            .getChildFile ("Clips");
 
     if (! folder.createDirectory())
     {
@@ -446,6 +646,13 @@ void ChordTextAudioProcessor::prepareToPlay (double sampleRate, int)
     lastObservedGeneration = 0;
     currentStep.store (-1, std::memory_order_relaxed);
     transportAvailable.store (false, std::memory_order_relaxed);
+
+    // Cancel after caching releases so the next block can still silence the
+    // notes that were sounding before the reset.
+    cancelChordPreview();
+    audioPreviewRequest = {};
+    appliedPreviewRequest = {};
+    bypassInterval = false;
 }
 
 void ChordTextAudioProcessor::releaseResources()
@@ -459,6 +666,11 @@ void ChordTextAudioProcessor::releaseResources()
     currentStep.store (-1, std::memory_order_relaxed);
     transportAvailable.store (false, std::memory_order_relaxed);
     playheadAvailable.store (false, std::memory_order_relaxed);
+
+    cancelChordPreview();
+    audioPreviewRequest = {};
+    appliedPreviewRequest = {};
+    bypassInterval = false;
 }
 
 void ChordTextAudioProcessor::releaseActiveNotes (juce::MidiBuffer& midi, int sampleOffset)
@@ -509,6 +721,16 @@ void ChordTextAudioProcessor::processBlock (juce::AudioBuffer<float>& audio,
     // Releases requested by prepareToPlay must precede every new event.
     emitPendingReleases (midi);
 
+    // The first normal block after a bypassed interval invalidates anything
+    // requested while bypassed. A fresh gesture is required afterwards.
+    if (bypassInterval)
+    {
+        bypassInterval = false;
+        cancelChordPreview();
+        audioPreviewRequest = {};
+        appliedPreviewRequest = {};
+    }
+
     if ((sharedPlanIndex.load (std::memory_order_acquire) & freshPlanBit) != 0)
     {
         const auto previous = sharedPlanIndex.exchange (
@@ -526,6 +748,15 @@ void ChordTextAudioProcessor::processBlock (juce::AudioBuffer<float>& audio,
         hasExpectedBeat = false;
     }
 
+    // The latest requested preview state wins. Consume at most one publication
+    // per block; no publication means the previously requested state stands
+    // until cancellation or an idle request replaces it.
+    {
+        chordscript::PreviewRequest request;
+        if (previewExchange.readLatestRequest (request))
+            audioPreviewRequest = request;
+    }
+
     auto disableLiveGeneration = [this, &midi]
     {
         releaseActiveNotes (midi, 0);
@@ -535,47 +766,105 @@ void ChordTextAudioProcessor::processBlock (juce::AudioBuffer<float>& audio,
     };
 
     auto* hostPlayHead = getPlayHead();
-    if (hostPlayHead == nullptr)
+    juce::Optional<juce::AudioPlayHead::PositionInfo> position;
+    if (hostPlayHead != nullptr)
+        position = hostPlayHead->getPosition();
+
+    playheadAvailable.store (position.hasValue(), std::memory_order_relaxed);
+
+    juce::Optional<double> ppqPosition;
+    juce::Optional<double> bpm;
+    if (position.hasValue())
     {
-        playheadAvailable.store (false, std::memory_order_relaxed);
+        ppqPosition = position->getPpqPosition();
+        bpm = position->getBpm();
+
+        // Cache the tempo while the playhead is legally readable. Export runs
+        // on the message thread and must not call getPosition() itself.
+        if (bpm && std::isfinite (*bpm) && *bpm > 0.0)
+            lastHostBpm.store (*bpm, std::memory_order_relaxed);
+    }
+
+    const auto transportValid = position.hasValue()
+                                && position->getIsPlaying()
+                                && ppqPosition.hasValue()
+                                && bpm.hasValue()
+                                && std::isfinite (*ppqPosition)
+                                && std::isfinite (*bpm)
+                                && *bpm > 0.0;
+    transportAvailable.store (transportValid, std::memory_order_relaxed);
+
+    const auto cancellationEpoch = previewCancellationEpoch.load (std::memory_order_acquire);
+    const auto dataRevision = previewDataRevision.load (std::memory_order_acquire);
+
+    auto desiredPreview = audioPreviewRequest;
+    if (desiredPreview.mode != chordscript::PreviewMode::idle
+        && (desiredPreview.cancellationEpoch != cancellationEpoch
+            || desiredPreview.dataRevision != dataRevision))
+    {
+        desiredPreview = makeIdlePreviewRequest();
+        desiredPreview.cancellationEpoch = cancellationEpoch;
+        desiredPreview.dataRevision = dataRevision;
+    }
+
+    const auto wasPreviewing = appliedPreviewRequest.mode != chordscript::PreviewMode::idle;
+    if (desiredPreview.mode != chordscript::PreviewMode::idle)
+    {
+        if (! wasPreviewing
+            || appliedPreviewRequest.gestureId != desiredPreview.gestureId
+            || appliedPreviewRequest.pitches != desiredPreview.pitches
+            || appliedPreviewRequest.velocity != desiredPreview.velocity)
+        {
+            // Manual output is exclusive: release everything first, including
+            // pitches shared with the chord being started.
+            releaseActiveNotes (midi, 0);
+
+            for (auto pitchIndex = 0; pitchIndex < 128; ++pitchIndex)
+            {
+                const auto word = static_cast<std::size_t> (pitchIndex / 64);
+                const auto bit = std::uint64_t { 1 } << (pitchIndex % 64);
+                if ((desiredPreview.pitches[word] & bit) == 0)
+                    continue;
+
+                midi.addEvent (juce::MidiMessage::noteOn (
+                                   1, pitchIndex,
+                                   static_cast<juce::uint8> (desiredPreview.velocity)),
+                               0);
+                activePitches[static_cast<std::size_t> (pitchIndex)] = true;
+            }
+
+            appliedPreviewRequest = desiredPreview;
+            expectedNextBeat = 0.0;
+            hasExpectedBeat = false;
+        }
+
+        currentStep.store (-1, std::memory_order_relaxed);
+        publishPreviewFeedback (desiredPreview);
+        return;
+    }
+
+    if (wasPreviewing)
+    {
+        // Return to the progression at the current host position.
+        releaseActiveNotes (midi, 0);
+        appliedPreviewRequest = {};
+        expectedNextBeat = 0.0;
+        hasExpectedBeat = false;
+        publishPreviewFeedback (desiredPreview);
+        // Fall through to the normal scheduler in this block.
+    }
+
+    if (! position.hasValue())
+    {
         disableLiveGeneration();
         return;
     }
 
-    const auto position = hostPlayHead->getPosition();
-    if (! position)
-    {
-        playheadAvailable.store (false, std::memory_order_relaxed);
-        disableLiveGeneration();
-        return;
-    }
-
-    playheadAvailable.store (true, std::memory_order_relaxed);
-
-    // Cache the tempo while the playhead is legally readable. Export runs on
-    // the message thread and must not call getPosition() itself.
-    if (const auto hostBpm = position->getBpm();
-        hostBpm && std::isfinite (*hostBpm) && *hostBpm > 0.0)
-        lastHostBpm.store (*hostBpm, std::memory_order_relaxed);
-
-    if (! position->getIsPlaying())
+    if (! transportValid)
     {
         disableLiveGeneration();
         return;
     }
-
-    const auto ppqPosition = position->getPpqPosition();
-    const auto bpm = position->getBpm();
-
-    if (! ppqPosition || ! bpm
-        || ! std::isfinite (*ppqPosition) || ! std::isfinite (*bpm)
-        || *bpm <= 0.0)
-    {
-        disableLiveGeneration();
-        return;
-    }
-
-    transportAvailable.store (true, std::memory_order_relaxed);
 
     const auto numSamples = audio.getNumSamples();
     const auto blockStartBeat = *ppqPosition;
@@ -721,6 +1010,19 @@ void ChordTextAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& au
     releaseActiveNotes (midi, 0);
     expectedNextBeat = 0.0;
     hasExpectedBeat = false;
+    currentStep.store (-1, std::memory_order_relaxed);
+
+    // Bypassed output never starts a note. Mark the interval so a request made
+    // while bypassed cannot revive on the first normal block.
+    bypassInterval = true;
+    cancelChordPreview();
+    audioPreviewRequest = {};
+    appliedPreviewRequest = {};
+
+    chordscript::PreviewRequest idle;
+    idle.cancellationEpoch = previewCancellationEpoch.load (std::memory_order_acquire);
+    idle.dataRevision = previewDataRevision.load (std::memory_order_acquire);
+    publishPreviewFeedback (idle);
 }
 
 bool ChordTextAudioProcessor::isTransportAvailable() const
@@ -827,6 +1129,12 @@ void ChordTextAudioProcessor::setStateInformation (const void* data, int sizeInB
     }
     const auto selected = std::clamp (static_cast<int> (scaleState.getProperty ("value", 0)), 0, 8);
     scaleState.setProperty ("value", selected, nullptr);
+
+    // Invalidate preview before any deferred message-thread rebuild. The
+    // revision advance rejects the old pitch snapshot immediately.
+    planRebuildPending.store (true, std::memory_order_release);
+    previewDataRevision.fetch_add (1, std::memory_order_acq_rel);
+    cancelChordPreview();
 
     // The plan rebuild owns message-thread-only state. Restoring state from a
     // host is expected on the message thread; if a host breaks that contract,

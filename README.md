@@ -145,7 +145,9 @@ in the manual checklist below. It has **not** been verified in this environment.
    to apply the current text immediately.
 4. Use the key, mode, voicing, range, velocity, and loop controls to shape the
    output.
-5. Read the chord cards for the degree, spelled notes, and duration of each
+5. Left-press a chord card to hear it, or right-click to hold it. Release the left
+   button or right-click the held card again to stop.
+6. Read the chord cards for the degree, spelled notes, and duration of each
    chord, then drag the clip preview into the DAW or export a `.mid` file.
 
 Live generation needs host playhead data with a PPQ position and tempo. The status
@@ -157,6 +159,8 @@ line shows one of these messages:
 - `No transport available` — the host supplies no usable position.
 
 With no usable position, the plugin generates no notes and does not free-run.
+Manual chord preview is the exception: it can sound while the transport is stopped
+or no playhead is available, as long as the host keeps processing the plugin.
 
 The progression is anchored to song position 0. If you start playback or seek into
 the middle of a chord, the plugin plays that chord from the start of the block. The
@@ -167,6 +171,51 @@ loop wrap. When the host calls `prepareToPlay` again, the plugin queues the soun
 pitches for release and emits their note-offs at sample 0 of the next block, before
 any new events. `releaseResources` cannot emit MIDI, so it only clears the internal
 note tracking; the host must flush sounding notes when it releases the plugin.
+
+## Previewing chords
+
+Each chord card can be auditioned directly while the plugin is routed to an
+instrument. Preview sends the same generated pitches as normal playback; it does not
+add a synth.
+
+- Left-press a card to start that chord immediately. Release the left mouse button
+  to stop it. A matching release outside the card or the plugin window still stops
+  the preview.
+- Right-click a card to hold it. Right-click the same held card again to release it.
+  Ordinary focus loss does not release a hold, so you can keep using the DAW while a
+  chord is held.
+- Only one manual preview sounds per plugin instance. Choosing another card replaces
+  the first without layering. Left-pressing another card replaces a held chord;
+  releasing the left button does not restore the old hold.
+- Pressing the sounding card again releases and retriggers it, even when the pitches
+  are identical.
+- Preview uses the card's generated pitches, channel 1, and the current velocity.
+  The card's beat duration does not limit preview.
+- During playback, manual preview replaces the progression's output while the host
+  timeline keeps moving. When preview ends, normal output resumes at the current
+  host position; it does not restart the progression. Releasing exactly on a chord
+  boundary starts the newly active chord once.
+- Preview is transient and per instance. It is not stored in project state, APVTS,
+  UI preferences, exported MIDI, or drag clips.
+
+Preview works without host PPQ or tempo, including with the transport stopped, but
+it needs the host to keep calling the plugin's process callback. A suspended or
+offline plugin cannot emit MIDI. If the host stops processing, sounding notes remain
+until processing resumes or the host flushes them; the same host-flush limitation
+applies to normal playback.
+
+Preview stops immediately when you begin editing the progression text (before the
+150 ms parse), when key, mode, scale mode, voicing, range, velocity, or Loop changes,
+when project state is restored, when the editor closes, when the plugin is bypassed,
+and when the host resets processing. A cancelled hold does not restart automatically
+after a valid edit, unbypass, editor reopen, project load, or processing reset. A new
+gesture is required. Changing UI scale, exporting MIDI, and dragging a clip do not
+cancel preview. Transport start, stop, seek, loop wrap, and tempo changes do not
+cancel or retrigger it either.
+
+The chord card shows `PREVIEW` for a momentary preview, a pin and `HELD` for a
+latched preview, and `PLAYING` only for normal progression output. Normal playback
+highlighting is suppressed while a manual preview is sounding.
 
 ## Regenerate and automatic parsing
 
@@ -239,7 +288,8 @@ inherit the key's spelling. The Degree column is a normalized functional label.
 Absolute chords are labeled best-effort relative to the selected key, using the root
 letter and accidental (not the nearest pitch class). Chromatic or ambiguous roots use
 a best-effort `b`/`#` label. The plugin highlights the card for the currently playing
-chord during playback.
+chord during playback, marks a sounding manual preview as `PREVIEW` or `HELD`, and
+marks normal output as `PLAYING`.
 
 Numeric cards also show the numeric degree, for example `Degree 2 · ii7`.
 Cards show the last valid progression with reduced brightness while input is invalid.
@@ -265,6 +315,7 @@ examples.
 | Range | C3–C6 | C2–C5, C3–C6, or C4–C7 |
 | Velocity | 100 | 1–127 |
 | Loop | On | On or off |
+| Chord preview | — | Left-press to preview, release to stop; right-click to hold, right-click again to release |
 | Drag to DAW | — | Drags one loop as a `.mid` file; enabled for valid, non-empty progressions |
 | Reveal file | — | Opens Explorer at the most recent successful export or drag file |
 | UI Scale | 100% | Footer dropdown: 75%, 100%, 125%, or 150%; saved locally |
@@ -354,8 +405,9 @@ least one note. While a debounced edit is pending, the preview shows the last pa
 text, not the characters just typed. An empty progression also disables the preview.
 While the preview is disabled, it shows `Fix errors to drag`, or
 `Enter a progression to drag` when the progression is empty. A drag start first
-forces a parse of the current text, on the same path as Regenerate. If parsing fails,
-no file is created and the diagnostics are shown.
+applies a pending edit on the same path as Regenerate when the text has changed. An
+unchanged text is not rebuilt, so dragging does not cancel an active chord preview.
+If parsing fails, no file is created and the diagnostics are shown.
 
 A drag writes exactly one loop cycle at the current key, mode, voicing, range, and
 velocity settings. The file uses the same notes, 960 ticks per quarter note, MIDI
@@ -668,8 +720,12 @@ user-supplied paths. All numeric formatting and parsing uses the classic locale.
 spelling, keys, voicing, and the render plan. `Tests/ProcessorTest.cpp` is a JUCE
 console application covering transport behaviour, note lifecycle, parameters, state
 round-trip, the editor, Regenerate, the Beats column, the drag-file writer and its
-two modes, and MIDI export/read-back. `Tests/CliTest.cpp` covers the command-line
-utility: option parsing, formatting, JSON, and REPL state.
+two modes, and MIDI export/read-back. `Tests/ChordPreviewChecks.cpp` is called from
+that suite and covers the preview exchange, processor arbitration and resynchronisation,
+cancellation and lifecycle, independent instances, state/file invariance, card hit
+testing, scaling, scrolled gestures, displayed-revision rejection, and editor cleanup.
+`Tests/CliTest.cpp` covers the command-line utility: option parsing, formatting, JSON,
+and REPL state.
 
 Run all three suites through a build script:
 
@@ -689,11 +745,13 @@ Or run the already-built executables directly:
 ./build/Tests/CliTests.exe
 ```
 
-Each executable prints a summary such as `115 checks, 0 failures` for `TheoryTests`,
-`233 checks, 0 failures` for `ProcessorTests`, and `204 checks, 0 failures` for
-`CliTests`. It returns a non-zero exit code if any check fails. The build scripts
-stop on the first failing suite. The build must produce no warnings from project
-code under JUCE's recommended warning flags.
+Each executable prints a summary such as `531 checks, 0 failures` for `TheoryTests`,
+`16982 checks, 0 failures` for `ProcessorTests`, and `262 checks, 0 failures` for
+`CliTests`. The processor count varies slightly because one preview stress check
+records how many coalesced publications the reader observed. Each executable returns
+a non-zero exit code if any check fails. The build scripts stop on the first failing
+suite. The build must produce no warnings from project code under JUCE's recommended
+warning flags.
 
 ## Licensing
 
@@ -709,7 +767,11 @@ Known limitations in v1:
 
 - Windows x64 only. There are no macOS or Linux builds.
 - Live generation requires host PPQ and tempo. Without them, the plugin stays silent
-  and does not free-run.
+  and does not free-run. Manual chord preview still works while the transport is
+  stopped, but only while the host keeps processing the plugin.
+- Chord preview is transient and per instance. The plugin cannot emit preview notes
+  when a host suspends or disconnects it, and it cannot flush notes after
+  `releaseResources`; the host owns that final flush.
 - The plugin accepts MIDI input for host compatibility, but ignores it.
 - Slash bass and applied chords (`V/V`) are unsupported on Roman numerals.
 - Parenthesised alterations are unsupported. `Cb5` and `C#5` are read as root
@@ -781,6 +843,32 @@ repository's automated verification. They therefore remain unverified until some
 runs them.
 
 - [ ] Route **Chord Text** to an instrument and hear the default progression.
+- [ ] With the transport stopped, left-press a chord card and confirm the chord
+      sounds; release and confirm it stops. Confirm this works with no playhead if
+      the host offers such a mode.
+- [ ] During playback, left-press a card and confirm it overrides the progression
+      without stopping the timeline; release and confirm playback resumes at the
+      current position rather than restarting.
+- [ ] Right-click a card, use the DAW while it is held, and confirm ordinary focus
+      loss does not release it. Right-click it again to stop.
+- [ ] Release a momentary preview outside the plugin window and confirm no stuck
+      notes remain.
+- [ ] Press the sounding card again and confirm it retriggers without layering.
+- [ ] Hold one card and left-press another; release the left button and confirm the
+      held chord does not return.
+- [ ] While a chord is held, change key, mode, scale mode, voicing, range, velocity,
+      and Loop one at a time and confirm each cancels the hold without restarting it.
+- [ ] Start editing the progression text and confirm a held chord stops before the
+      150 ms parse.
+- [ ] Bypass, reset processing, save/reload the project, and close/reopen the editor
+      while a chord is held; confirm the hold stops and does not restart.
+- [ ] Change UI scale and export or drag a clip while a chord is held; confirm the
+      preview continues.
+- [ ] Zoom and scroll the chord sequence, then left-press and right-click a visible
+      card at 75%, 100%, 125%, and 150%; confirm the intended card sounds and
+      releases.
+- [ ] Release a preview exactly at a chord boundary and confirm the next chord starts
+      once, with no duplicate note-ons or restart.
 - [ ] Change the text to `C, Cmaj7, Dmaj7, Emin9, Fmaj7` and confirm the notes.
 - [ ] Change to `i-iv-V` in A minor and confirm Am, Dm, E.
 - [ ] Test explicit durations, for example `Am7:2, Dm7:1.5, G7`.
@@ -830,8 +918,8 @@ install-vst3.bat            copy the Release VST3 bundle to the system VST3 fold
 build.sh / build.bat        configure/build/test wrappers
 Source/Theory/              JUCE-free notes, keys, chords, parsers, voicing, render plan,
                             MIDI file writer
-Source/Plugin/              processor (transport, state, export, drag files), editor,
-                            clip drag component
+Source/Plugin/              processor (transport, state, export, drag files, preview), editor,
+                            chord preview exchange, clip drag component
 Source/Cli/                 command-line utility (options, report, session, main)
 Tests/                      TheoryTests, ProcessorTests, and CliTests
 docs/superpowers/specs/     design specification

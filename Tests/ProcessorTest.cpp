@@ -1,4 +1,5 @@
 #include "Check.h"
+#include "ChordPreviewChecks.h"
 #include "Plugin/ClipDragComponent.h"
 #include "Plugin/PluginProcessor.h"
 #include "Plugin/PluginEditor.h"
@@ -158,6 +159,7 @@ static juce::Component* findEditorChild (juce::Component& parent, const juce::St
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
+    runChordPreviewChecks();
 
     // UI preferences are validated and shared through a local file, not project state.
     {

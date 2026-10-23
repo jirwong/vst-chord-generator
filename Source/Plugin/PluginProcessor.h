@@ -2,6 +2,7 @@
 
 #include "Theory/Diagnostic.h"
 #include "Theory/RenderPlan.h"
+#include "Plugin/ChordPreview.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
@@ -48,12 +49,27 @@ public:
     juce::String getScaleSummary() const;
     void rebuildPlan(); // message thread only
 
+    // Chord-card preview. Gesture methods run on the message thread and
+    // return a non-zero gesture ID only when the card is eligible.
+    chordscript::PreviewGestureId beginMomentaryPreview (
+        int stepIndex, std::uint64_t displayedRevision);
+    void endMomentaryPreview (chordscript::PreviewGestureId gestureId);
+    void toggleHeldPreview (int stepIndex, std::uint64_t displayedRevision);
+    chordscript::PreviewFeedback getPreviewFeedback();
+    std::uint64_t getPreviewCardRevision() const noexcept;
+    bool isPlanRebuildPending() const noexcept;
+    void cancelChordPreview() noexcept;
+    void setPreviewInputPending (bool pending);
+
     // Message thread only. Uses the same plan as live playback.
     bool exportMidiFile (const juce::File& file, juce::String& errorMessage);
 
     // Message thread only. Writes a drag-and-drop clip to the user's
     // Documents\ChordText\Clips folder.
     juce::File createDragClipFile (juce::String& errorMessage);
+    // Message thread only. Same writer with an explicit destination folder.
+    juce::File createDragClipFile (juce::String& errorMessage,
+                                   const juce::File& outputDirectory);
     juce::File getLastDragClipFile() const;
 
     juce::AudioProcessorEditor* createEditor() override;
@@ -79,6 +95,13 @@ private:
 
     // Message thread only. Never call from processBlock.
     void publishPlan (chordtext::RenderPlan plan);
+
+    // Message thread only.
+    bool isPreviewCardEligible (int stepIndex, std::uint64_t displayedRevision) const noexcept;
+    chordscript::PreviewRequest makeIdlePreviewRequest() const noexcept;
+    void publishPreviewRequest (const chordscript::PreviewRequest& request);
+    // Audio thread only.
+    void publishPreviewFeedback (const chordscript::PreviewRequest& request);
 
     enum class MidiFileMode { exportFile, dragClip };
 
@@ -142,4 +165,25 @@ private:
     std::vector<LearningRow> learningRows;
     chordtext::RenderPlan exportPlan;
     juce::File lastDragClipFile;
+
+    // Request channel: message thread writes, audio thread reads.
+    // Feedback channel: audio thread writes, message thread reads.
+    chordscript::ChordPreviewExchange previewExchange;
+    std::atomic<std::uint64_t> previewCancellationEpoch { 0 };
+    std::atomic<std::uint64_t> previewDataRevision { 0 };
+    std::atomic<bool> planRebuildPending { false };
+
+    // Message thread only.
+    std::uint64_t previewCacheRevision = 0;
+    std::vector<std::array<std::uint64_t, 2>> previewPitchMasks;
+    int previewVelocity = 100;
+    bool previewInputPending = false;
+    chordscript::PreviewGestureId nextPreviewGestureId = 1;
+    chordscript::PreviewRequest desiredPreviewRequest;
+    chordscript::PreviewFeedback cachedPreviewFeedback;
+
+    // Audio thread only.
+    chordscript::PreviewRequest audioPreviewRequest;
+    chordscript::PreviewRequest appliedPreviewRequest;
+    bool bypassInterval = false;
 };
