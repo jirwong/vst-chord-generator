@@ -2,6 +2,7 @@
 
 #include "ClipDragComponent.h"
 #include "PluginProcessor.h"
+#include "UiSettings.h"
 
 #include <memory>
 #include <vector>
@@ -40,13 +41,21 @@ class ChordTextAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                             private juce::Timer
 {
 public:
-    explicit ChordTextAudioProcessorEditor (ChordTextAudioProcessor&);
+    explicit ChordTextAudioProcessorEditor (ChordTextAudioProcessor&, UiSettings settings = UiSettings{});
     ~ChordTextAudioProcessorEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
 
 private:
+    class ContentComponent final : public juce::Component
+    {
+    public:
+        void paint (juce::Graphics&) override;
+    };
+
+    void layoutContent();
+    void applyUiScale (int percent);
     void timerCallback() override;
     void applyProgressionText (bool force);
     void startExport();
@@ -57,6 +66,12 @@ private:
     juce::String describeDiagnostic (const chordtext::Diagnostic&) const;
 
     ChordTextAudioProcessor& processor;
+    UiSettings uiSettings;
+    int appliedUiScalePercent = 100;
+    juce::String uiScaleSaveError;
+    ContentComponent editorContent;
+    juce::Label uiScaleLabel;
+    juce::ComboBox uiScaleBox;
 
     juce::Label brandLabel;
     juce::Label productLabel;
