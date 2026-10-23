@@ -2,7 +2,7 @@
 
 Chord Text accepts chord symbols and Roman numerals. The plugin editor and the
 `chordtext-cli` utility use the same parser, so this guide applies to both.
-The plugin produces MIDI only; the syntax determines which notes are generated.
+The plugin produces MIDI only. The syntax determines which notes are generated.
 
 ## At a glance
 
@@ -281,7 +281,7 @@ bVII     -> Bb in C major
 #vii°    -> G#dim in A minor
 ```
 
-One accidental is typical; repeated accidentals are accepted by the parser.
+One accidental is typical. The parser also accepts repeated accidentals.
 
 ### 4.4 Key and mode
 
@@ -290,7 +290,7 @@ The key selector supplies the tonic spelling and the major/minor mode.
 - The key always matters for Roman numerals.
 - Minor keys use natural-minor spelling for scale degrees.
 - Chromatic notes come from accidentals or from the chord quality itself.
-- In A minor, `V` is E–G#–B with the G# spelled correctly; `vii°` uses the
+- In A minor, `V` is E–G#–B, with the G# spelled correctly. `vii°` uses the
   natural-minor G.
 
 Selectable tonics are:
@@ -348,8 +348,8 @@ Error at character 3: unknown chord root (H)
 Error at character 6: unknown extension "9" (C99)
 ```
 
-`C99` reports `"9"` because the first `9` is consumed as a valid ninth quality;
-the second `9` is the unknown extension.
+`C99` reports `"9"` because the parser consumes the first `9` as a valid ninth
+quality. The second `9` is the unknown extension.
 
 If any token is invalid:
 
