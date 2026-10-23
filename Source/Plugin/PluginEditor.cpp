@@ -1,24 +1,30 @@
 #include "PluginEditor.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <utility>
 
 namespace
 {
-constexpr int editorWidth = 760;
-constexpr int editorHeight = 640;
+constexpr int editorWidth = 960;
+constexpr int editorHeight = 650;
 constexpr int timerFrequencyHz = 30;
 constexpr double debounceMilliseconds = 150.0;
-constexpr int rowHeight = 24;
+constexpr int sequenceCardHeight = 138;
+constexpr int sequenceCardGap = 12;
+constexpr int minimumCardWidth = 190;
 
-const auto backgroundColour = juce::Colour (0xff1b1b1d);
-const auto panelColour = juce::Colour (0xff232326);
-const auto outlineColour = juce::Colour (0xff3a3a3e);
-const auto textColour = juce::Colour (0xffe4e4e6);
-const auto dimTextColour = juce::Colour (0xffb0b0b4);
-const auto errorColour = juce::Colour (0xffe07070);
-const auto currentStepColour = juce::Colour (0xff3c5a7a);
+const auto backgroundColour = juce::Colour (0xff121718);
+const auto headerColour = juce::Colour (0xff171e20);
+const auto panelColour = juce::Colour (0xff1d2527);
+const auto outlineColour = juce::Colour (0xff3a4648);
+const auto textColour = juce::Colour (0xffe5ebea);
+const auto dimTextColour = juce::Colour (0xff9eaaab);
+const auto errorColour = juce::Colour (0xffe78480);
+const auto accentColour = juce::Colour (0xff70c9c0);
+const auto activeCardColour = juce::Colour (0xff203033);
+const auto footerColour = juce::Colour (0xff171e20);
 
 void configureLabel (juce::Label& label, const juce::String& text, juce::Colour colour,
                      float fontHeight)
@@ -47,6 +53,147 @@ juce::String formatBeats (double beats)
 }
 } // namespace
 
+ChordSequenceComponent::ChordSequenceComponent()
+{
+    setComponentID ("chordSequence");
+    setScrollBarsShown (true, false);
+    setScrollBarThickness (8);
+    getVerticalScrollBar().setColour (juce::ScrollBar::thumbColourId,
+                                      outlineColour.brighter (0.15f));
+    setViewedComponent (&content, false);
+}
+
+ChordSequenceComponent::~ChordSequenceComponent()
+{
+    setViewedComponent (nullptr, false);
+}
+
+void ChordSequenceComponent::resized()
+{
+    auto contentWidth = getWidth();
+    auto contentHeight = content.getContentHeightForWidth (contentWidth);
+    if (contentHeight > getHeight())
+    {
+        contentWidth = std::max (0, contentWidth - getScrollBarThickness());
+        contentHeight = content.getContentHeightForWidth (contentWidth);
+    }
+
+    content.setSize (contentWidth, contentHeight);
+}
+
+void ChordSequenceComponent::setRows (std::vector<LearningRow> newRows, int currentStep,
+                                      bool stale)
+{
+    content.setRows (std::move (newRows), currentStep, stale);
+    resized();
+    repaint();
+}
+
+void ChordSequenceComponent::CardContent::setRows (std::vector<LearningRow> newRows,
+                                                    int newCurrentStep, bool isStale)
+{
+    if (newRows.size() == rows.size() && newCurrentStep == currentStep && isStale == stale)
+    {
+        auto unchanged = true;
+        for (std::size_t index = 0; index < rows.size(); ++index)
+        {
+            if (rows[index].chord != newRows[index].chord
+                || rows[index].degree != newRows[index].degree
+                || rows[index].notes != newRows[index].notes
+                || rows[index].durationBeats != newRows[index].durationBeats)
+            {
+                unchanged = false;
+                break;
+            }
+        }
+
+        if (unchanged)
+            return;
+    }
+
+    rows = std::move (newRows);
+    currentStep = newCurrentStep;
+    stale = isStale;
+    resized();
+    repaint();
+}
+
+int ChordSequenceComponent::CardContent::getContentHeightForWidth (int width) const
+{
+    const auto columns = std::max (1, (width + sequenceCardGap)
+                                          / (minimumCardWidth + sequenceCardGap));
+    const auto rowCount = rows.empty() ? 1
+                                        : (static_cast<int> (rows.size()) + columns - 1) / columns;
+    return rowCount * sequenceCardHeight + (rowCount - 1) * sequenceCardGap;
+}
+
+void ChordSequenceComponent::CardContent::resized()
+{
+    const auto availableWidth = getWidth();
+    columnCount = std::max (1, (availableWidth + sequenceCardGap)
+                                  / (minimumCardWidth + sequenceCardGap));
+    cardWidth = (availableWidth - (columnCount - 1) * sequenceCardGap) / columnCount;
+}
+
+void ChordSequenceComponent::CardContent::paint (juce::Graphics& g)
+{
+    g.fillAll (backgroundColour);
+
+    if (rows.empty())
+    {
+        g.setColour (dimTextColour);
+        g.setFont (juce::Font (juce::FontOptions (13.0f)));
+        g.drawText (stale ? "Fix the progression above to build the sequence"
+                          : "Enter chord symbols or Roman numerals to preview the sequence",
+                    getLocalBounds(), juce::Justification::centred, true);
+        return;
+    }
+
+    for (std::size_t index = 0; index < rows.size(); ++index)
+    {
+        const auto column = static_cast<int> (index) % columnCount;
+        const auto rowIndex = static_cast<int> (index) / columnCount;
+        auto card = juce::Rectangle<int> (column * (cardWidth + sequenceCardGap),
+                                          rowIndex * (sequenceCardHeight + sequenceCardGap),
+                                          cardWidth, sequenceCardHeight).toFloat();
+        const auto isCurrent = ! stale && static_cast<int> (index) == currentStep;
+
+        g.setOpacity (stale ? 0.46f : 1.0f);
+        g.setColour (isCurrent ? activeCardColour : panelColour);
+        g.fillRoundedRectangle (card, 9.0f);
+        g.setColour (isCurrent ? accentColour : outlineColour);
+        g.drawRoundedRectangle (card, 9.0f, isCurrent ? 1.4f : 1.0f);
+
+        if (isCurrent)
+        {
+            g.setColour (accentColour);
+            g.fillRoundedRectangle (card.withHeight (4.0f).reduced (9.0f, 0.0f), 2.0f);
+        }
+
+        auto inner = card.toNearestInt().reduced (16, 12);
+        auto titleRow = inner.removeFromTop (27);
+        g.setColour (textColour);
+        g.setFont (juce::Font (juce::FontOptions (18.0f, juce::Font::bold)));
+        g.drawFittedText (rows[index].chord, titleRow.removeFromLeft (titleRow.getWidth() - 52),
+                          juce::Justification::centredLeft, 1);
+        g.setColour (dimTextColour);
+        g.setFont (juce::Font (juce::FontOptions (11.0f)));
+        g.drawFittedText (rows[index].degree, titleRow, juce::Justification::centredRight, 1);
+
+        g.setColour (dimTextColour);
+        g.setFont (juce::Font (juce::FontOptions (13.0f)));
+        g.drawFittedText (rows[index].notes, inner.removeFromTop (35),
+                          juce::Justification::centredLeft, 1);
+
+        g.setColour (dimTextColour);
+        g.setFont (juce::Font (juce::FontOptions (10.0f)));
+        g.drawText (formatBeats (rows[index].durationBeats) + " BEATS", inner,
+                    juce::Justification::bottomLeft, false);
+    }
+
+    g.setOpacity (1.0f);
+}
+
 ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProcessor& p)
     : juce::AudioProcessorEditor (&p),
       processor (p)
@@ -54,13 +201,22 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     setSize (editorWidth, editorHeight);
     setWantsKeyboardFocus (true);
 
-    configureLabel (progressionLabel, "Progression", dimTextColour, 13.0f);
-    configureLabel (keyLabel, "Key", dimTextColour, 13.0f);
-    configureLabel (modeLabel, "Mode", dimTextColour, 13.0f);
-    configureLabel (voicingLabel, "Voicing", dimTextColour, 13.0f);
-    configureLabel (rangeLabel, "Range", dimTextColour, 13.0f);
-    configureLabel (velocityLabel, "Velocity", dimTextColour, 13.0f);
-    configureLabel (statusLabel, {}, textColour, 13.0f);
+    configureLabel (brandLabel, "CHORDSCRIPT", textColour, 14.0f);
+    brandLabel.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+    configureLabel (productLabel, "MIDI GENERATOR", dimTextColour, 11.0f);
+    configureLabel (transportStatusLabel, {}, dimTextColour, 11.0f);
+    configureLabel (progressionLabel, "PROGRESSION", dimTextColour, 11.0f);
+    configureLabel (progressionHintLabel, "Type chord symbols or Roman numerals",
+                    dimTextColour, 11.0f);
+    configureLabel (keyLabel, "KEY", dimTextColour, 11.0f);
+    configureLabel (modeLabel, "MODE", dimTextColour, 11.0f);
+    configureLabel (voicingLabel, "VOICING", dimTextColour, 11.0f);
+    configureLabel (rangeLabel, "RANGE", dimTextColour, 11.0f);
+    configureLabel (velocityLabel, "VELOCITY", dimTextColour, 11.0f);
+    configureLabel (sequenceLabel, "CHORD SEQUENCE", dimTextColour, 11.0f);
+    configureLabel (sequenceMetaLabel, {}, dimTextColour, 11.0f);
+    configureLabel (sequenceStatusLabel, {}, accentColour, 11.0f);
+    configureLabel (statusLabel, {}, dimTextColour, 11.0f);
 
     progressionEditor.setMultiLine (true, true);
     progressionEditor.setReturnKeyStartsNewLine (true);
@@ -71,17 +227,19 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     progressionEditor.setColour (juce::TextEditor::textColourId, textColour);
     progressionEditor.setColour (juce::TextEditor::outlineColourId, outlineColour);
     progressionEditor.setColour (juce::TextEditor::focusedOutlineColourId,
-                                 juce::Colours::cornflowerblue);
+                                 accentColour);
     progressionEditor.setFont (juce::Font (juce::FontOptions (14.0f)));
     progressionEditor.onTextChange = [this]
     {
         textEditPending = true;
         lastTextEditMs = juce::Time::getMillisecondCounterHiRes();
+        refreshStatus();
     };
 
     // Read-only, scrollable area: every diagnostic is shown, not just the
     // first two.
     diagnosticsDisplay.setMultiLine (true, true);
+    diagnosticsDisplay.setComponentID ("diagnosticsDisplay");
     diagnosticsDisplay.setScrollbarsShown (true);
     diagnosticsDisplay.setReadOnly (true);
     diagnosticsDisplay.setCaretVisible (false);
@@ -90,7 +248,7 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     diagnosticsDisplay.setColour (juce::TextEditor::textColourId, errorColour);
     diagnosticsDisplay.setColour (juce::TextEditor::outlineColourId, outlineColour);
     diagnosticsDisplay.setColour (juce::TextEditor::focusedOutlineColourId, outlineColour);
-    diagnosticsDisplay.setFont (juce::Font (juce::FontOptions (13.0f)));
+    diagnosticsDisplay.setFont (juce::Font (juce::FontOptions (12.0f)));
 
     auto setUpCombo = [this] (juce::ComboBox& box, const char* parameterId)
     {
@@ -101,6 +259,7 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
         box.setColour (juce::ComboBox::backgroundColourId, panelColour);
         box.setColour (juce::ComboBox::textColourId, textColour);
         box.setColour (juce::ComboBox::outlineColourId, outlineColour);
+        box.setColour (juce::ComboBox::arrowColourId, dimTextColour);
         addAndMakeVisible (box);
     };
 
@@ -114,13 +273,27 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     velocitySlider.setColour (juce::Slider::textBoxTextColourId, textColour);
     velocitySlider.setColour (juce::Slider::textBoxBackgroundColourId, panelColour);
     velocitySlider.setColour (juce::Slider::textBoxOutlineColourId, outlineColour);
-    velocitySlider.setColour (juce::Slider::trackColourId, juce::Colours::cornflowerblue);
+    velocitySlider.setColour (juce::Slider::trackColourId, accentColour);
     velocitySlider.setColour (juce::Slider::backgroundColourId, outlineColour);
+    velocitySlider.setColour (juce::Slider::thumbColourId, accentColour);
 
     loopButton.setColour (juce::ToggleButton::textColourId, textColour);
-    loopButton.setColour (juce::ToggleButton::tickColourId, juce::Colours::cornflowerblue);
+    loopButton.setColour (juce::ToggleButton::tickColourId, accentColour);
+    loopButton.setComponentID ("loopButton");
+
+    auto styleButton = [] (juce::TextButton& button)
+    {
+        button.setColour (juce::TextButton::buttonColourId, panelColour);
+        button.setColour (juce::TextButton::buttonOnColourId, activeCardColour);
+        button.setColour (juce::TextButton::textColourOffId, textColour);
+        button.setColour (juce::TextButton::textColourOnId, accentColour);
+    };
+    styleButton (exportButton);
+    styleButton (regenerateButton);
+    styleButton (revealClipButton);
 
     exportButton.onClick = [this] { startExport(); };
+    exportButton.setComponentID ("exportButton");
     exportButton.setEnabled (false);
 
     regenerateButton.setComponentID ("regenerateButton");
@@ -130,14 +303,12 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
         refreshStatus();
     };
 
-    revealClipButton.setComponentID ("revealClip");
+    revealClipButton.setComponentID ("revealFile");
     revealClipButton.setEnabled (false);
     revealClipButton.onClick = [this]
     {
-        const auto file = processor.getLastDragClipFile();
-
-        if (file.existsAsFile())
-            file.revealToUser();
+        if (latestOutputFile.existsAsFile())
+            latestOutputFile.revealToUser();
     };
 
     clipDrag.setComponentID ("clipDrag");
@@ -169,26 +340,19 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
         refreshStatus();
     };
 
-    tableModel.setCurrentStep (-1);
-    table.setModel (&tableModel);
-    table.setComponentID ("learningTable");
-    table.setRowHeight (rowHeight);
-    table.setColour (juce::TableListBox::backgroundColourId, panelColour);
-    table.setColour (juce::TableListBox::outlineColourId, outlineColour);
-    table.setOutlineThickness (1);
-    table.getHeader().addColumn ("Chord", 1, 150, 40, -1,
-                                 juce::TableHeaderComponent::notSortable);
-    table.getHeader().addColumn ("Degree", 2, 150, 40, -1,
-                                 juce::TableHeaderComponent::notSortable);
-    table.getHeader().addColumn ("Notes", 3, 300, 40, -1,
-                                 juce::TableHeaderComponent::notSortable);
-    table.getHeader().addColumn ("Beats", 4, 70, 40, -1,
-                                 juce::TableHeaderComponent::notSortable);
-    table.getHeader().setColour (juce::TableHeaderComponent::backgroundColourId,
-                                 juce::Colour (0xff303034));
-    table.getHeader().setColour (juce::TableHeaderComponent::textColourId, textColour);
+    sequenceStatusLabel.setComponentID ("sequenceStatus");
+    sequenceLabel.setComponentID ("sequenceLabel");
+    sequenceMetaLabel.setComponentID ("sequenceMeta");
+    sequenceView.setComponentID ("chordSequence");
+    brandLabel.setComponentID ("brandLabel");
+    transportStatusLabel.setComponentID ("transportStatus");
+    statusLabel.setComponentID ("footerStatus");
 
+    addAndMakeVisible (brandLabel);
+    addAndMakeVisible (productLabel);
+    addAndMakeVisible (transportStatusLabel);
     addAndMakeVisible (progressionLabel);
+    addAndMakeVisible (progressionHintLabel);
     addAndMakeVisible (progressionEditor);
     addAndMakeVisible (keyLabel);
     addAndMakeVisible (modeLabel);
@@ -201,9 +365,12 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     addAndMakeVisible (regenerateButton);
     addAndMakeVisible (revealClipButton);
     addAndMakeVisible (clipDrag);
+    addAndMakeVisible (sequenceLabel);
+    addAndMakeVisible (sequenceMetaLabel);
+    addAndMakeVisible (sequenceStatusLabel);
     addAndMakeVisible (statusLabel);
     addAndMakeVisible (diagnosticsDisplay);
-    addAndMakeVisible (table);
+    addAndMakeVisible (sequenceView);
 
     keyAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "key", keyBox);
     modeAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "mode", modeBox);
@@ -232,61 +399,96 @@ ChordTextAudioProcessorEditor::~ChordTextAudioProcessorEditor()
 void ChordTextAudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (backgroundColour);
+
+    auto area = getLocalBounds();
+    const auto header = area.removeFromTop (58);
+    const auto footer = area.removeFromBottom (48);
+    g.setColour (headerColour);
+    g.fillRect (header);
+    g.setColour (footerColour);
+    g.fillRect (footer);
+    g.setColour (outlineColour.withAlpha (0.7f));
+    g.drawHorizontalLine (header.getBottom() - 1, 0.0f, static_cast<float> (getWidth()));
+    g.drawHorizontalLine (footer.getY(), 0.0f, static_cast<float> (getWidth()));
 }
 
 void ChordTextAudioProcessorEditor::resized()
 {
-    auto bounds = getLocalBounds().reduced (16);
+    auto area = getLocalBounds();
+    const auto header = area.removeFromTop (58);
+    const auto footer = area.removeFromBottom (48);
 
-    auto progressionHeader = bounds.removeFromTop (22);
-    regenerateButton.setBounds (progressionHeader.removeFromRight (110));
-    progressionHeader.removeFromRight (8);
-    progressionLabel.setBounds (progressionHeader);
-    progressionEditor.setBounds (bounds.removeFromTop (104));
-    bounds.removeFromTop (12);
+    brandLabel.setBounds (28, header.getY() + 15, 112, 24);
+    productLabel.setBounds (145, header.getY() + 17, 140, 20);
+    transportStatusLabel.setBounds (getWidth() - 270, header.getY() + 16, 242, 22);
+    transportStatusLabel.setJustificationType (juce::Justification::centredRight);
+    statusLabel.setBounds (footer.reduced (28, 0));
 
-    auto controlLabels = bounds.removeFromTop (18);
-    auto controlFields = bounds.removeFromTop (28);
-    bounds.removeFromTop (12);
+    auto content = area.reduced (28, 10);
+    auto progressionHeader = content.removeFromTop (32);
+    regenerateButton.setBounds (progressionHeader.removeFromRight (100).withHeight (30));
+    progressionHeader.removeFromRight (10);
+    progressionLabel.setBounds (progressionHeader.removeFromTop (15));
+    progressionHintLabel.setBounds (progressionHeader);
 
-    const int gap = 8;
-    const int fieldWidth = (controlFields.getWidth() - 5 * gap) / 6;
+    progressionEditor.setBounds (content.removeFromTop (86));
+    const auto diagnostics = processor.getDiagnostics();
+    const auto diagnosticLineCount = static_cast<int> (diagnostics.size());
+    const auto diagnosticsHeight = diagnosticsDisplay.isVisible()
+                                       ? std::clamp (diagnosticLineCount * 18 + 6, 24, 60)
+                                       : 0;
+    if (diagnosticsHeight > 0)
+        content.removeFromTop (4);
+    diagnosticsDisplay.setBounds (content.removeFromTop (diagnosticsHeight));
+    content.removeFromTop (diagnosticsHeight > 0 ? 8 : 12);
+
+    const auto controlLabels = content.removeFromTop (16);
+    const auto controlFields = content.removeFromTop (40);
+    content.removeFromTop (14);
+
+    constexpr int gap = 12;
     int x = controlFields.getX();
-
-    auto placeControl = [&] (juce::Label& label, juce::Component& field)
+    auto placeControl = [&] (juce::Label& label, juce::Component& field, int width)
     {
-        label.setBounds (x, controlLabels.getY(), fieldWidth, controlLabels.getHeight());
-        field.setBounds (x, controlFields.getY(), fieldWidth, controlFields.getHeight());
-        x += fieldWidth + gap;
+        label.setBounds (x, controlLabels.getY(), width, controlLabels.getHeight());
+        field.setBounds (x, controlFields.getY(), width, controlFields.getHeight());
+        x += width + gap;
     };
 
-    placeControl (keyLabel, keyBox);
-    placeControl (modeLabel, modeBox);
-    placeControl (voicingLabel, voicingBox);
-    placeControl (rangeLabel, rangeBox);
-    placeControl (velocityLabel, velocitySlider);
-    loopButton.setBounds (x, controlFields.getY(), fieldWidth,
-                          controlFields.getHeight());
+    placeControl (keyLabel, keyBox, 145);
+    placeControl (modeLabel, modeBox, 150);
+    placeControl (voicingLabel, voicingBox, 165);
+    placeControl (rangeLabel, rangeBox, 125);
+    const auto loopWidth = 60;
+    const auto velocityWidth = std::max (80, controlFields.getRight() - x - loopWidth - gap);
+    placeControl (velocityLabel, velocitySlider, velocityWidth);
+    loopButton.setBounds (x, controlFields.getY(), loopWidth, controlFields.getHeight());
 
-    auto statusLabelRow = bounds.removeFromTop (20);
-    statusLabel.setBounds (statusLabelRow);
-    bounds.removeFromTop (4);
+    constexpr int sequenceHeaderHeight = 40;
+    constexpr int actionRowHeight = 44;
+    constexpr int actionGap = 8;
+    constexpr int desiredSequenceHeight = 160;
+    const auto sequenceHeight = std::min (desiredSequenceHeight,
+        std::max (1, content.getHeight() - sequenceHeaderHeight - actionRowHeight - actionGap));
+    const auto flexibleSequenceGap = std::max (0, content.getHeight() - sequenceHeaderHeight
+        - sequenceHeight - actionRowHeight - actionGap);
+    content.removeFromTop (flexibleSequenceGap);
 
-    // Actions get their own row so a long status/filename is not squeezed.
-    auto actionRow = bounds.removeFromTop (28);
-    exportButton.setBounds (actionRow.removeFromRight (140));
-    actionRow.removeFromRight (8);
-    revealClipButton.setBounds (actionRow.removeFromRight (140));
-    bounds.removeFromTop (6);
+    auto sequenceHeader = content.removeFromTop (sequenceHeaderHeight);
+    const auto sequenceHeaderY = sequenceHeader.getY();
+    sequenceLabel.setBounds (sequenceHeader.removeFromTop (17));
+    sequenceMetaLabel.setBounds (sequenceHeader);
+    sequenceStatusLabel.setBounds (getWidth() - 228, sequenceHeaderY + 1, 200, 23);
 
-    auto diagnosticsArea = bounds.removeFromBottom (68);
-    bounds.removeFromBottom (6);
+    sequenceView.setBounds (content.removeFromTop (sequenceHeight));
+    content.removeFromBottom (actionGap);
 
-    clipDrag.setBounds (bounds.removeFromBottom (48));
-    bounds.removeFromBottom (8);
-
-    table.setBounds (bounds);
-    diagnosticsDisplay.setBounds (diagnosticsArea);
+    auto actionRow = content.removeFromBottom (actionRowHeight);
+    revealClipButton.setBounds (actionRow.removeFromRight (156));
+    actionRow.removeFromRight (10);
+    exportButton.setBounds (actionRow.removeFromRight (148));
+    actionRow.removeFromRight (10);
+    clipDrag.setBounds (actionRow);
 }
 
 void ChordTextAudioProcessorEditor::timerCallback()
@@ -294,12 +496,6 @@ void ChordTextAudioProcessorEditor::timerCallback()
     if (textEditPending
         && juce::Time::getMillisecondCounterHiRes() - lastTextEditMs >= debounceMilliseconds)
         applyProgressionText (false);
-
-    if (tableModel.setRows (processor.getLearningRows()))
-        table.updateContent();
-
-    if (tableModel.setCurrentStep (processor.getCurrentStep()))
-        table.repaint();
 
     refreshStatus();
 }
@@ -344,7 +540,11 @@ void ChordTextAudioProcessorEditor::startExport()
             juce::String error;
 
             if (safeThis->processor.exportMidiFile (file, error))
+        {
+            safeThis->latestOutputFile = file;
+            safeThis->lastRevealAvailable = true;
                 safeThis->lastExportStatus = "Exported " + file.getFileName();
+        }
             else
                 safeThis->lastExportStatus = "Export failed: " + error;
         }
@@ -356,6 +556,12 @@ void ChordTextAudioProcessorEditor::startExport()
 
 void ChordTextAudioProcessorEditor::refreshStatus()
 {
+    const auto diagnostics = processor.getDiagnostics();
+    const auto rows = processor.getLearningRows();
+    const auto shouldShowDiagnostics = ! textEditPending && ! diagnostics.empty();
+    auto layoutChanged = diagnosticsDisplay.isVisible() != shouldShowDiagnostics
+                         || lastTextEditPending != textEditPending;
+
     const auto statusText = buildStatusText();
 
     if (statusText != lastStatusText)
@@ -364,7 +570,6 @@ void ChordTextAudioProcessorEditor::refreshStatus()
         statusLabel.setText (statusText, juce::dontSendNotification);
     }
 
-    const auto diagnostics = processor.getDiagnostics();
     juce::String diagnosticsText;
 
     for (std::size_t index = 0; index < diagnostics.size(); ++index)
@@ -379,15 +584,41 @@ void ChordTextAudioProcessorEditor::refreshStatus()
     {
         lastDiagnosticsText = diagnosticsText;
         diagnosticsDisplay.setText (diagnosticsText, juce::dontSendNotification);
+        layoutChanged = true;
     }
 
-    const auto rows = processor.getLearningRows();
+    if (diagnosticsDisplay.isVisible() != shouldShowDiagnostics)
+        diagnosticsDisplay.setVisible (shouldShowDiagnostics);
+
+    const auto sequenceStatus = textEditPending ? juce::String ("Updating preview")
+                                : ! diagnostics.empty()
+                                    ? rows.empty() ? juce::String ("Fix progression errors")
+                                                   : juce::String ("Last valid preview")
+                                : rows.empty() ? juce::String ("Enter a progression")
+                                               : juce::String::fromUTF8 ("\xe2\x9c\x93  Valid progression");
+    if (sequenceStatusLabel.getText() != sequenceStatus)
+        sequenceStatusLabel.setText (sequenceStatus, juce::dontSendNotification);
+    const auto sequenceStatusColour = textEditPending ? juce::Colour (0xffd5aa61)
+                                       : ! diagnostics.empty() ? errorColour
+                                       : rows.empty() ? dimTextColour : accentColour;
+    if (sequenceStatusLabel.findColour (juce::Label::textColourId) != sequenceStatusColour)
+        sequenceStatusLabel.setColour (juce::Label::textColourId, sequenceStatusColour);
+
     double totalBeats = 0.0;
 
     for (const auto& row : rows)
         totalBeats += row.durationBeats;
 
-    const bool canDrag = diagnostics.empty() && ! rows.empty();
+    const auto sequenceMeta = rows.empty() ? juce::String ("No chords yet")
+                               : juce::String (static_cast<int> (rows.size())) + " chords  \xc2\xb7  "
+                                     + formatBeats (totalBeats) + " beats";
+    if (sequenceMetaLabel.getText() != sequenceMeta)
+        sequenceMetaLabel.setText (sequenceMeta, juce::dontSendNotification);
+    sequenceView.setRows (rows, processor.getCurrentStep(),
+                          textEditPending || ! diagnostics.empty());
+    refreshTransportStatus();
+
+    const bool canDrag = ! textEditPending && diagnostics.empty() && ! rows.empty();
     clipDrag.setLoopInfo (totalBeats, canDrag);
 
     // Check the last drag file only when its path changes instead of doing a
@@ -399,39 +630,57 @@ void ChordTextAudioProcessorEditor::refreshStatus()
     if (lastDragPath != lastRevealPath)
     {
         lastRevealPath = lastDragPath;
-        lastRevealAvailable = lastDragPath.isNotEmpty() && lastDragFile.existsAsFile();
+        if (lastDragPath.isNotEmpty())
+        {
+            latestOutputFile = lastDragFile;
+            lastRevealAvailable = lastDragFile.existsAsFile();
+        }
     }
 
     revealClipButton.setEnabled (lastRevealAvailable);
 
-    const auto canExport = fileChooser == nullptr
-                           && diagnostics.empty()
-                           && ! rows.empty();
+    const auto canExport = fileChooser == nullptr && canDrag;
 
     if (exportButton.isEnabled() != canExport)
         exportButton.setEnabled (canExport);
+
+    if (layoutChanged)
+        resized();
+    lastTextEditPending = textEditPending;
 }
 
 juce::String ChordTextAudioProcessorEditor::buildStatusText() const
 {
-    juce::String text;
-
-    if (processor.isTransportAvailable())
-        text = "Transport ready";
-    else if (processor.isPlayheadAvailable())
-        text = "Transport stopped";
-    else
-        text = "No transport available";
-
     const auto rows = processor.getLearningRows();
-
-    text += rows.empty() ? "  |  No chords"
-                         : "  |  " + juce::String (static_cast<int> (rows.size())) + " chords";
+    const auto diagnostics = processor.getDiagnostics();
+    juce::String text = textEditPending ? juce::String ("Updating preview")
+                       : ! diagnostics.empty() ? juce::String ("Fix errors to prepare MIDI")
+                       : rows.empty() ? juce::String ("No progression")
+                                      : juce::String (static_cast<int> (rows.size()))
+                                            + " chords  Â·  MIDI ready";
 
     if (lastExportStatus.isNotEmpty())
-        text += "  |  " + lastExportStatus;
+        text += "  Â·  " + lastExportStatus;
 
     return text;
+}
+
+void ChordTextAudioProcessorEditor::refreshTransportStatus()
+{
+    const auto isPlaying = processor.isTransportAvailable();
+    const auto hasPlayhead = processor.isPlayheadAvailable();
+    const auto text = isPlaying ? juce::String ("Transport playing")
+                    : hasPlayhead ? juce::String ("Transport stopped")
+                                  : juce::String ("No transport available");
+    const auto colour = isPlaying ? accentColour
+                       : hasPlayhead ? juce::Colour (0xffd5aa61)
+                                     : dimTextColour;
+
+    const auto decoratedText = juce::String::fromUTF8 ("\xe2\x97\x8f  ") + text;
+    if (transportStatusLabel.getText() != decoratedText)
+        transportStatusLabel.setText (decoratedText, juce::dontSendNotification);
+    if (transportStatusLabel.findColour (juce::Label::textColourId) != colour)
+        transportStatusLabel.setColour (juce::Label::textColourId, colour);
 }
 
 juce::String ChordTextAudioProcessorEditor::describeDiagnostic (
@@ -450,88 +699,4 @@ juce::String ChordTextAudioProcessorEditor::describeDiagnostic (
     }
 
     return text;
-}
-
-int ChordTextAudioProcessorEditor::LearningTableModel::getNumRows()
-{
-    return static_cast<int> (rows.size());
-}
-
-const LearningRow* ChordTextAudioProcessorEditor::LearningTableModel::rowFor (int rowNumber) const
-{
-    if (rowNumber < 0 || static_cast<std::size_t> (rowNumber) >= rows.size())
-        return nullptr;
-
-    return &rows[static_cast<std::size_t> (rowNumber)];
-}
-
-bool ChordTextAudioProcessorEditor::LearningTableModel::setRows (
-    std::vector<LearningRow> newRows)
-{
-    if (newRows.size() == rows.size())
-    {
-        auto unchanged = true;
-
-        for (std::size_t index = 0; index < rows.size(); ++index)
-        {
-            if (rows[index].chord != newRows[index].chord
-                || rows[index].degree != newRows[index].degree
-                || rows[index].notes != newRows[index].notes
-                || rows[index].durationBeats != newRows[index].durationBeats)
-            {
-                unchanged = false;
-                break;
-            }
-        }
-
-        if (unchanged)
-            return false;
-    }
-
-    rows = std::move (newRows);
-    return true;
-}
-
-bool ChordTextAudioProcessorEditor::LearningTableModel::setCurrentStep (int step)
-{
-    if (step == currentStep)
-        return false;
-
-    currentStep = step;
-    return true;
-}
-
-void ChordTextAudioProcessorEditor::LearningTableModel::paintRowBackground (
-    juce::Graphics& g, int rowNumber, int, int, bool rowIsSelected)
-{
-    if (rowNumber == currentStep)
-        g.fillAll (currentStepColour);
-    else if (rowIsSelected)
-        g.fillAll (currentStepColour.withAlpha (0.5f));
-    else
-        g.fillAll (panelColour);
-}
-
-void ChordTextAudioProcessorEditor::LearningTableModel::paintCell (
-    juce::Graphics& g, int rowNumber, int columnId, int width, int height, bool)
-{
-    const auto* row = rowFor (rowNumber);
-
-    if (row == nullptr)
-        return;
-
-    juce::String text;
-
-    switch (columnId)
-    {
-        case 1: text = row->chord; break;
-        case 2: text = row->degree; break;
-        case 3: text = row->notes; break;
-        case 4: text = formatBeats (row->durationBeats); break;
-        default: break;
-    }
-
-    g.setColour (textColour);
-    g.setFont (juce::Font (juce::FontOptions (13.0f)));
-    g.drawText (text, 4, 0, width - 8, height, juce::Justification::centredLeft, true);
 }

@@ -4,12 +4,12 @@
 
 namespace
 {
-const auto clipBackgroundColour = juce::Colour (0xff2b3f56);
-const auto clipOutlineColour = juce::Colour (0xff4d7ba6);
-const auto clipAccentColour = juce::Colour (0xff7fb2e5);
-const auto clipTextColour = juce::Colour (0xffe4e4e6);
-const auto clipDimTextColour = juce::Colour (0xffb0b0b4);
-const auto clipErrorTextColour = juce::Colour (0xffe07070);
+const auto clipBackgroundColour = juce::Colour (0xff203033);
+const auto clipOutlineColour = juce::Colour (0xff52777a);
+const auto clipAccentColour = juce::Colour (0xff70c9c0);
+const auto clipTextColour = juce::Colour (0xffe5ebea);
+const auto clipDimTextColour = juce::Colour (0xffa9b7b7);
+const auto clipErrorTextColour = juce::Colour (0xffe78480);
 
 juce::String formatNumber (double value)
 {
@@ -61,19 +61,32 @@ void ClipDragComponent::paint (juce::Graphics& g)
     g.setColour (enabled ? clipOutlineColour : clipOutlineColour.withAlpha (0.5f));
     g.drawRoundedRectangle (area, 6.0f, 1.0f);
 
-    // A small accent bar on the left makes the component read as a clip.
-    const auto accent = area.reduced (6.0f, 8.0f).removeFromLeft (4.0f);
-    g.setColour (enabled ? clipAccentColour : clipAccentColour.withAlpha (0.5f));
-    g.fillRoundedRectangle (accent, 2.0f);
+    // Draw a tiny monochrome keyboard so the action reads as MIDI at a glance.
+    auto keyboard = getLocalBounds().withSizeKeepingCentre (22, 14).translated (-getWidth() / 2 + 26, 0).toFloat();
+    g.setOpacity (enabled ? 1.0f : 0.55f);
+    g.setColour (clipTextColour);
+    g.drawRoundedRectangle (keyboard, 1.0f, 1.0f);
 
-    auto textArea = getLocalBounds().reduced (18, 6);
+    const auto whiteKeyWidth = keyboard.getWidth() / 7.0f;
+    for (int key = 1; key < 7; ++key)
+        g.drawVerticalLine (static_cast<int> (keyboard.getX() + whiteKeyWidth * key),
+                            keyboard.getY() + 1.0f, keyboard.getBottom() - 1.0f);
+
+    for (const auto key : { 0, 1, 3, 4, 5 })
+    {
+        auto blackKey = juce::Rectangle<float> (keyboard.getX() + whiteKeyWidth * (key + 1) - 2.0f,
+                                                 keyboard.getY(), 4.0f, keyboard.getHeight() * 0.57f);
+        g.fillRect (blackKey);
+    }
+
+    auto textArea = getLocalBounds().withTrimmedLeft (42).withTrimmedRight (10);
     auto titleArea = textArea.removeFromTop (textArea.getHeight() / 2);
     auto detailArea = textArea;
 
     g.setOpacity (enabled ? 1.0f : 0.6f);
     g.setColour (clipTextColour);
-    g.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
-    g.drawText ("Drag to DAW", titleArea, juce::Justification::centredLeft, true);
+    g.setFont (juce::Font (juce::FontOptions (12.0f, juce::Font::bold)));
+    g.drawText ("DRAG CLIP TO DAW", titleArea, juce::Justification::centredLeft, true);
 
     g.setColour (enabled ? clipDimTextColour : clipErrorTextColour);
     g.setFont (juce::Font (juce::FontOptions (12.0f)));

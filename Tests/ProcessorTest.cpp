@@ -783,8 +783,8 @@ int main()
 
         if (editor != nullptr)
         {
-            CHECK (editor->getWidth() == 760);
-            CHECK (editor->getHeight() == 640);
+            CHECK (editor->getWidth() == 960);
+            CHECK (editor->getHeight() == 650);
         }
     }
 
@@ -807,8 +807,8 @@ int main()
         ChordTextAudioProcessor p;
         std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
         CHECK (editor != nullptr);
-        CHECK (editor->getWidth() == 760);
-        CHECK (editor->getHeight() == 640);
+        CHECK (editor->getWidth() == 960);
+        CHECK (editor->getHeight() == 650);
 
         auto* progression = dynamic_cast<juce::TextEditor*> (
             editor->findChildWithID ("progressionEditor"));
@@ -837,20 +837,125 @@ int main()
         }
     }
 
-    // the learning table exposes the Beats column
+    // the sequence is exposed as a chord-card view
     {
         ChordTextAudioProcessor p;
         std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
         CHECK (editor != nullptr);
 
-        auto* table = dynamic_cast<juce::TableListBox*> (
-            editor->findChildWithID ("learningTable"));
-        CHECK (table != nullptr);
+        auto* sequence = editor->findChildWithID ("chordSequence");
+        CHECK (sequence != nullptr);
 
-        if (table != nullptr)
+        if (sequence != nullptr)
         {
-            CHECK (table->getHeader().getNumColumns (true) == 4);
-            CHECK (table->getHeader().getColumnName (4) == "Beats");
+            CHECK (sequence->isVisible());
+            CHECK (sequence->getComponentID() == "chordSequence");
+        }
+    }
+
+    // compact editor states keep diagnostics beside the editor and actions in sync
+    {
+        ChordTextAudioProcessor p;
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        CHECK (editor != nullptr);
+
+        auto* progression = dynamic_cast<juce::TextEditor*> (
+            editor->findChildWithID ("progressionEditor"));
+        auto* regenerate = dynamic_cast<juce::TextButton*> (
+            editor->findChildWithID ("regenerateButton"));
+        auto* diagnostics = dynamic_cast<juce::TextEditor*> (
+            editor->findChildWithID ("diagnosticsDisplay"));
+        auto* sequenceStatus = dynamic_cast<juce::Label*> (
+            editor->findChildWithID ("sequenceStatus"));
+        auto* sequence = editor->findChildWithID ("chordSequence");
+        auto* exportButton = dynamic_cast<juce::TextButton*> (
+            editor->findChildWithID ("exportButton"));
+        auto* revealButton = dynamic_cast<juce::TextButton*> (
+            editor->findChildWithID ("revealFile"));
+        auto* clip = dynamic_cast<ClipDragComponent*> (
+            editor->findChildWithID ("clipDrag"));
+        auto* loop = editor->findChildWithID ("loopButton");
+
+        CHECK (progression != nullptr);
+        CHECK (regenerate != nullptr);
+        CHECK (diagnostics != nullptr);
+        CHECK (sequenceStatus != nullptr);
+        CHECK (sequence != nullptr);
+        CHECK (exportButton != nullptr);
+        CHECK (revealButton != nullptr);
+        CHECK (clip != nullptr);
+        CHECK (loop != nullptr);
+
+        if (progression != nullptr && regenerate != nullptr && diagnostics != nullptr
+            && sequenceStatus != nullptr && sequence != nullptr && exportButton != nullptr
+            && revealButton != nullptr && clip != nullptr && loop != nullptr)
+        {
+            CHECK (! diagnostics->isVisible());
+            CHECK (sequenceStatus->getText() == juce::String::fromUTF8 ("\xe2\x9c\x93  Valid progression"));
+            CHECK (exportButton->isEnabled());
+            CHECK (clip->isEnabled());
+            CHECK (! revealButton->isEnabled());
+            CHECK (clip->getHeight() == exportButton->getHeight());
+            CHECK (clip->getHeight() == revealButton->getHeight());
+            CHECK (loop->getRight() <= editor->getWidth() - 28);
+
+            progression->setText ("H", juce::dontSendNotification);
+            regenerate->triggerClick();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+            CHECK (diagnostics->isVisible());
+            CHECK (diagnostics->getY() > progression->getBottom());
+            CHECK (diagnostics->getBottom() <= sequenceStatus->getY());
+            CHECK (sequenceStatus->getText() == "Last valid preview");
+            CHECK (! exportButton->isEnabled());
+            CHECK (! clip->isEnabled());
+
+            progression->setText ("", juce::dontSendNotification);
+            regenerate->triggerClick();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+            CHECK (! diagnostics->isVisible());
+            CHECK (sequenceStatus->getText() == "Enter a progression");
+            CHECK (! exportButton->isEnabled());
+            CHECK (! clip->isEnabled());
+
+            progression->setText ("G7", true);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+            CHECK (sequenceStatus->getText() == "Updating preview");
+            CHECK (! exportButton->isEnabled());
+            CHECK (! clip->isEnabled());
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+            CHECK (sequenceStatus->getText() == juce::String::fromUTF8 ("\xe2\x9c\x93  Valid progression"));
+            CHECK (exportButton->isEnabled());
+            CHECK (clip->isEnabled());
+        }
+    }
+
+    // the editor distinguishes unavailable, stopped, and active transport states
+    {
+        ChordTextAudioProcessor p;
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        auto* transport = dynamic_cast<juce::Label*> (
+            editor->findChildWithID ("transportStatus"));
+        CHECK (transport != nullptr);
+
+        if (transport != nullptr)
+        {
+            CHECK (transport->getText().contains ("No transport available"));
+
+            FakePlayHead head;
+            p.setPlayHead (&head);
+            p.prepareToPlay (48000.0, 512);
+            juce::AudioBuffer<float> buffer (0, 512);
+            juce::MidiBuffer midi;
+
+            head.set (0.0, false, 120.0);
+            p.processBlock (buffer, midi);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+            CHECK (transport->getText().contains ("Transport stopped"));
+
+            head.set (0.0, true, 120.0);
+            p.processBlock (buffer, midi);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+            CHECK (transport->getText().contains ("Transport playing"));
         }
     }
 
@@ -1074,7 +1179,7 @@ int main()
         auto* clip = dynamic_cast<ClipDragComponent*> (
             editor->findChildWithID ("clipDrag"));
         auto* reveal = dynamic_cast<juce::TextButton*> (
-            editor->findChildWithID ("revealClip"));
+            editor->findChildWithID ("revealFile"));
         auto* progression = dynamic_cast<juce::TextEditor*> (
             editor->findChildWithID ("progressionEditor"));
         CHECK (clip != nullptr);
