@@ -257,6 +257,7 @@ examples.
 | Loop | On | On or off |
 | Drag to DAW | — | Drags one loop as a `.mid` file; enabled for valid, non-empty progressions |
 | Reveal file | — | Opens Explorer at the most recent successful export or drag file |
+| UI Scale | 100% | Footer dropdown: 75%, 100%, 125%, or 150%; saved locally |
 
 All notes are sent on MIDI channel 1. Root-position voicing places the root at the
 lowest octave that fits the range. It stacks the remaining tones above the root.
@@ -278,6 +279,30 @@ The editor's Mode selector uses the new host parameter **Scale Mode** (`scaleMod
 Use this parameter to automate all nine scales. The original **Mode** parameter
 keeps its two Major/Minor values for existing automation. Old projects restore
 their original selection. New projects save the nine-choice selection.
+
+### UI scaling
+
+Use **UI SCALE** in the footer to change the interface size. Text, controls, and
+the plugin window scale together. The layout keeps its proportions.
+
+| Scale | Window size before host display scaling |
+|---|---|
+| 75% | 720 × 488 |
+| 100% | 960 × 650 |
+| 125% | 1200 × 813 |
+| 150% | 1440 × 975 |
+
+The current window changes immediately. Other open windows keep their size.
+Each editor reads the saved preference when it opens, including editors in other DAWs.
+
+The preference is stored for your Windows account in
+`%LOCALAPPDATA%\Chordscript\ui-settings.json`. It is separate from project state
+and is not an automation parameter. A missing or invalid preference uses 100%.
+Loading a project does not replace the local preference or resize an open editor.
+
+If saving fails, the current window keeps the selected size. The footer shows
+`UI scale was not saved`. New editors continue to use the last saved value.
+User zoom combines with the DAW's display scaling. It does not change Windows file dialogs.
 
 ## MIDI export
 
@@ -706,8 +731,8 @@ Known limitations in v1:
   directly.
 - The preview's bar count assumes 4/4 and is informational. The clip itself is
   beat-based, so a host in another meter can still use it.
-- The editor is a fixed 960×650. Its size has not been checked in
-  Bitwig's plugin window.
+- The editor uses a 960×650 base layout with four UI scales from 75% to 150%.
+  Actual host window resizing and mixed-DPI display behavior still require DAW checks.
 - Host state restore is assumed to run on the message thread. If a host calls
   `setStateInformation` on another thread, the plugin defers the plan rebuild to the
   message queue. The host is still responsible for serialising state changes.

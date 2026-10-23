@@ -199,10 +199,13 @@ void ChordSequenceComponent::CardContent::paint (juce::Graphics& g)
     g.endTransparencyLayer();
 }
 
-ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProcessor& p)
+ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProcessor& p, UiSettings settings)
     : juce::AudioProcessorEditor (&p),
-      processor (p)
+      processor (p),
+      uiSettings (std::move (settings))
 {
+    editorContent.setComponentID ("editorContent");
+    addAndMakeVisible (editorContent);
     setSize (editorWidth, editorHeight);
     setWantsKeyboardFocus (true);
 
@@ -224,6 +227,27 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     configureLabel (sequenceMetaLabel, {}, dimTextColour, 11.0f);
     configureLabel (sequenceStatusLabel, {}, accentColour, 11.0f);
     configureLabel (statusLabel, {}, dimTextColour, 11.0f);
+    configureLabel (uiScaleLabel, "UI SCALE", dimTextColour, 11.0f);
+    uiScaleLabel.setComponentID ("uiScaleLabel");
+    uiScaleBox.setComponentID ("uiScaleBox");
+    for (const auto percent : {75, 100, 125, 150})
+        uiScaleBox.addItem (juce::String (percent) + "%", percent);
+    uiScaleBox.setColour (juce::ComboBox::backgroundColourId, panelColour);
+    uiScaleBox.setColour (juce::ComboBox::textColourId, textColour);
+    uiScaleBox.setColour (juce::ComboBox::outlineColourId, outlineColour);
+    uiScaleBox.setColour (juce::ComboBox::arrowColourId, dimTextColour);
+    editorContent.addAndMakeVisible (uiScaleLabel);
+    editorContent.addAndMakeVisible (uiScaleBox);
+    uiScaleBox.onChange = [this]
+    {
+        const auto percent = uiScaleBox.getSelectedId();
+        if (! UiSettings::isSupportedScale (percent) || percent == appliedUiScalePercent)
+            return;
+        applyUiScale (percent);
+        uiScaleSaveError = uiSettings.saveUiScalePercent (percent).failed()
+            ? juce::String ("UI scale was not saved") : juce::String();
+        refreshStatus();
+    };
 
     progressionEditor.setMultiLine (true, true);
     progressionEditor.setReturnKeyStartsNewLine (true);
@@ -267,7 +291,7 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
         box.setColour (juce::ComboBox::textColourId, textColour);
         box.setColour (juce::ComboBox::outlineColourId, outlineColour);
         box.setColour (juce::ComboBox::arrowColourId, dimTextColour);
-        addAndMakeVisible (box);
+        editorContent.addAndMakeVisible (box);
     };
 
     setUpCombo (keyBox, "key");
@@ -356,30 +380,30 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     transportStatusLabel.setComponentID ("transportStatus");
     statusLabel.setComponentID ("footerStatus");
 
-    addAndMakeVisible (brandLabel);
-    addAndMakeVisible (productLabel);
-    addAndMakeVisible (transportStatusLabel);
-    addAndMakeVisible (progressionLabel);
-    addAndMakeVisible (progressionHintLabel);
-    addAndMakeVisible (progressionEditor);
-    addAndMakeVisible (keyLabel);
-    addAndMakeVisible (modeLabel);
-    addAndMakeVisible (scaleSummaryLabel);
-    addAndMakeVisible (voicingLabel);
-    addAndMakeVisible (rangeLabel);
-    addAndMakeVisible (velocityLabel);
-    addAndMakeVisible (velocitySlider);
-    addAndMakeVisible (loopButton);
-    addAndMakeVisible (exportButton);
-    addAndMakeVisible (regenerateButton);
-    addAndMakeVisible (revealClipButton);
-    addAndMakeVisible (clipDrag);
-    addAndMakeVisible (sequenceLabel);
-    addAndMakeVisible (sequenceMetaLabel);
-    addAndMakeVisible (sequenceStatusLabel);
-    addAndMakeVisible (statusLabel);
-    addAndMakeVisible (diagnosticsDisplay);
-    addAndMakeVisible (sequenceView);
+    editorContent.addAndMakeVisible (brandLabel);
+    editorContent.addAndMakeVisible (productLabel);
+    editorContent.addAndMakeVisible (transportStatusLabel);
+    editorContent.addAndMakeVisible (progressionLabel);
+    editorContent.addAndMakeVisible (progressionHintLabel);
+    editorContent.addAndMakeVisible (progressionEditor);
+    editorContent.addAndMakeVisible (keyLabel);
+    editorContent.addAndMakeVisible (modeLabel);
+    editorContent.addAndMakeVisible (scaleSummaryLabel);
+    editorContent.addAndMakeVisible (voicingLabel);
+    editorContent.addAndMakeVisible (rangeLabel);
+    editorContent.addAndMakeVisible (velocityLabel);
+    editorContent.addAndMakeVisible (velocitySlider);
+    editorContent.addAndMakeVisible (loopButton);
+    editorContent.addAndMakeVisible (exportButton);
+    editorContent.addAndMakeVisible (regenerateButton);
+    editorContent.addAndMakeVisible (revealClipButton);
+    editorContent.addAndMakeVisible (clipDrag);
+    editorContent.addAndMakeVisible (sequenceLabel);
+    editorContent.addAndMakeVisible (sequenceMetaLabel);
+    editorContent.addAndMakeVisible (sequenceStatusLabel);
+    editorContent.addAndMakeVisible (statusLabel);
+    editorContent.addAndMakeVisible (diagnosticsDisplay);
+    editorContent.addAndMakeVisible (sequenceView);
 
     keyAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "key", keyBox);
     modeAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "scaleMode", modeBox);
@@ -390,6 +414,9 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
                                                              velocitySlider);
     loopAttachment = std::make_unique<ButtonAttachment> (processor.apvts, "loop", loopButton);
 
+    const auto initialScale = uiSettings.loadUiScalePercent();
+    uiScaleBox.setSelectedId (initialScale, juce::dontSendNotification);
+    applyUiScale (initialScale);
     refreshStatus();
     startTimerHz (timerFrequencyHz);
 }
@@ -408,6 +435,11 @@ ChordTextAudioProcessorEditor::~ChordTextAudioProcessorEditor()
 void ChordTextAudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (backgroundColour);
+}
+
+void ChordTextAudioProcessorEditor::ContentComponent::paint (juce::Graphics& g)
+{
+    g.fillAll (backgroundColour);
 
     auto area = getLocalBounds();
     const auto header = area.removeFromTop (58);
@@ -423,15 +455,38 @@ void ChordTextAudioProcessorEditor::paint (juce::Graphics& g)
 
 void ChordTextAudioProcessorEditor::resized()
 {
-    auto area = getLocalBounds();
+    editorContent.setBounds (0, 0, editorWidth, editorHeight);
+    layoutContent();
+}
+
+void ChordTextAudioProcessorEditor::applyUiScale (int percent)
+{
+    if (! UiSettings::isSupportedScale (percent))
+        return;
+    appliedUiScalePercent = percent;
+    editorContent.setTransform (juce::AffineTransform::scale (static_cast<float> (percent) / 100.0f));
+    setSize (static_cast<int> (std::lround (editorWidth * percent / 100.0)),
+             static_cast<int> (std::lround (editorHeight * percent / 100.0)));
+    layoutContent();
+    repaint();
+}
+
+void ChordTextAudioProcessorEditor::layoutContent()
+{
+    auto area = editorContent.getLocalBounds();
     const auto header = area.removeFromTop (58);
     const auto footer = area.removeFromBottom (48);
 
     brandLabel.setBounds (28, header.getY() + 15, 112, 24);
     productLabel.setBounds (145, header.getY() + 17, 140, 20);
-    transportStatusLabel.setBounds (getWidth() - 270, header.getY() + 16, 242, 22);
+    transportStatusLabel.setBounds (editorWidth - 270, header.getY() + 16, 242, 22);
     transportStatusLabel.setJustificationType (juce::Justification::centredRight);
-    statusLabel.setBounds (footer.reduced (28, 0));
+    auto footerArea = footer.reduced (28, 0);
+    uiScaleBox.setBounds (footerArea.removeFromRight (86).withSizeKeepingCentre (86, 28));
+    footerArea.removeFromRight (10);
+    uiScaleLabel.setBounds (footerArea.removeFromRight (65));
+    footerArea.removeFromRight (12);
+    statusLabel.setBounds (footerArea);
 
     auto content = area.reduced (28, 10);
     auto progressionHeader = content.removeFromTop (32);
@@ -489,7 +544,7 @@ void ChordTextAudioProcessorEditor::resized()
     const auto sequenceHeaderY = sequenceHeader.getY();
     sequenceLabel.setBounds (sequenceHeader.removeFromTop (17));
     sequenceMetaLabel.setBounds (sequenceHeader);
-    sequenceStatusLabel.setBounds (getWidth() - 228, sequenceHeaderY + 1, 200, 23);
+    sequenceStatusLabel.setBounds (editorWidth - 228, sequenceHeaderY + 1, 200, 23);
 
     sequenceView.setBounds (content.removeFromTop (sequenceHeight));
     content.removeFromBottom (actionGap);
@@ -659,7 +714,7 @@ void ChordTextAudioProcessorEditor::refreshStatus()
         exportButton.setEnabled (canExport);
 
     if (layoutChanged)
-        resized();
+        layoutContent();
     lastTextEditPending = textEditPending;
 }
 
@@ -672,6 +727,9 @@ juce::String ChordTextAudioProcessorEditor::buildStatusText() const
                        : rows.empty() ? juce::String ("No progression")
                                       : juce::String (static_cast<int> (rows.size()))
                                             + juce::String::fromUTF8 (" chords \xc2\xb7 MIDI ready");
+
+    if (uiScaleSaveError.isNotEmpty())
+        text = uiScaleSaveError + juce::String::fromUTF8 (" \xc2\xb7 ") + text;
 
     if (lastExportStatus.isNotEmpty())
         text += juce::String::fromUTF8 (" \xc2\xb7 ") + lastExportStatus;

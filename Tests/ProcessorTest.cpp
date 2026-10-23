@@ -1,10 +1,14 @@
 #include "Check.h"
 #include "Plugin/ClipDragComponent.h"
 #include "Plugin/PluginProcessor.h"
+#include "Plugin/PluginEditor.h"
+#include "Plugin/UiSettings.h"
 
 #include <juce_audio_utils/juce_audio_utils.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <memory>
 #include <vector>
 #include <thread>
@@ -136,9 +140,320 @@ static bool readFirstTempo (const juce::File& file, double& secondsPerQuarter)
     return false;
 }
 
+static juce::AudioProcessorEditor* createTestEditor (ChordTextAudioProcessor& processor)
+{
+    return new ChordTextAudioProcessorEditor (processor, UiSettings {juce::File()});
+}
+
+static juce::Component* findEditorChild (juce::Component& parent, const juce::String& id)
+{
+    if (parent.getComponentID() == id)
+        return &parent;
+    for (auto* child : parent.getChildren())
+        if (auto* match = findEditorChild (*child, id))
+            return match;
+    return nullptr;
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
+
+    // UI preferences are validated and shared through a local file, not project state.
+    {
+        const auto directory = juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("build/Tests/ui-settings").getChildFile (juce::Uuid().toString());
+        CHECK (directory.createDirectory().wasOk());
+        const auto file = directory.getChildFile ("ui-settings.json");
+        UiSettings settings (file);
+        UiSettings otherProcess (file);
+        CHECK (settings.loadUiScalePercent() == 100);
+        CHECK (! file.exists());
+        for (const auto percent : {75, 100, 125, 150})
+        {
+            CHECK (UiSettings::isSupportedScale (percent));
+            CHECK (settings.saveUiScalePercent (percent).wasOk());
+            CHECK (otherProcess.loadUiScalePercent() == percent);
+            CHECK (juce::JSON::parse (file.loadFileAsString())["uiScalePercent"].isInt());
+        }
+        const auto previous = file.loadFileAsString();
+        for (const auto percent : {0, 74, 80, 99, 151, 200})
+        {
+            CHECK (! UiSettings::isSupportedScale (percent));
+            CHECK (settings.saveUiScalePercent (percent).failed());
+            CHECK (file.loadFileAsString() == previous);
+        }
+        for (const auto* invalid : {"broken", "{}", "[]", "null", "{\"uiScalePercent\":\"125\"}",
+                                   "{\"uiScalePercent\":125.5}", "{\"uiScalePercent\":100.0}",
+                                   "{\"uiScalePercent\":90}", "{\"uiScalePercent\":null}"})
+        {
+            CHECK (file.replaceWithText (invalid));
+            CHECK (settings.loadUiScalePercent() == 100);
+            CHECK (file.loadFileAsString() == invalid);
+        }
+        const auto blockedParent = directory.getChildFile ("not-a-folder");
+        CHECK (blockedParent.replaceWithText ("keep"));
+        const UiSettings blocked (blockedParent.getChildFile ("ui-settings.json"));
+        CHECK (blocked.loadUiScalePercent() == 100);
+        CHECK (blocked.saveUiScalePercent (125).failed());
+        CHECK (blockedParent.loadFileAsString() == "keep");
+        const UiSettings disabled {juce::File()};
+        CHECK (disabled.loadUiScalePercent() == 100);
+        CHECK (disabled.saveUiScalePercent (125).failed());
+
+        CHECK (settings.saveUiScalePercent (125).wasOk());
+        const auto saved = file.loadFileAsString();
+        CHECK (file.setReadOnly (true));
+        CHECK (settings.saveUiScalePercent (150).failed());
+        CHECK (file.loadFileAsString() == saved);
+        CHECK (file.setReadOnly (false));
+
+        // Independent writers start together against an absent preference file.
+        for (int round = 0; round < 8; ++round)
+        {
+            const auto shared = directory.getChildFile ("concurrent-" + juce::String (round) + ".json");
+            std::atomic<int> ready {0};
+            std::atomic<bool> start {false};
+            std::array<bool, 4> success {};
+            std::array<std::thread, 4> writers;
+            const std::array<int, 4> percentages {75, 100, 125, 150};
+            for (size_t index = 0; index < writers.size(); ++index)
+                writers[index] = std::thread ([&, index]
+                {
+                    ++ready;
+                    while (! start.load())
+                        std::this_thread::yield();
+                    const auto result = UiSettings (shared).saveUiScalePercent (percentages[index]);
+                    success[index] = result.wasOk();
+                });
+            while (ready.load() != 4)
+                std::this_thread::yield();
+            start = true;
+            for (auto& writer : writers)
+                writer.join();
+            // Windows can reject overlapping replacements. A failed writer must
+            // leave a complete value from one of the successful writers.
+            CHECK (std::any_of (success.begin(), success.end(), [] (bool value) { return value; }));
+            const auto value = juce::JSON::parse (shared.loadFileAsString())["uiScalePercent"];
+            CHECK (value.isInt() && UiSettings::isSupportedScale (static_cast<int> (value)));
+            bool savedBySuccessfulWriter = false;
+            for (size_t index = 0; index < success.size(); ++index)
+                savedBySuccessfulWriter = savedBySuccessfulWriter
+                    || (success[index] && static_cast<int> (value) == percentages[index]);
+            CHECK (savedBySuccessfulWriter);
+        }
+    }
+
+    // User zoom scales logical content and composes with the host's display scale.
+    {
+        const auto file = juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("build/Tests/ui-settings").getChildFile (juce::Uuid().toString()).getChildFile ("scale.json");
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("1(7), 6(7), 2(7), 5(7)");
+        ChordTextAudioProcessorEditor editor (p, UiSettings (file));
+        editor.setVisible (true); // JUCE hit testing excludes hidden components.
+        auto* selector = dynamic_cast<juce::ComboBox*> (findEditorChild (editor, "uiScaleBox"));
+        auto* content = findEditorChild (editor, "editorContent");
+        auto* label = dynamic_cast<juce::Label*> (findEditorChild (editor, "uiScaleLabel"));
+        CHECK (selector != nullptr && content != nullptr);
+        CHECK (label != nullptr && label->getText() == "UI SCALE");
+        if (selector && content)
+        {
+            CHECK (selector->getNumItems() == 4);
+            CHECK (selector->getText() == "100%");
+            const int percentages[] {75, 100, 125, 150};
+            const int widths[] {720, 960, 1200, 1440};
+            const int heights[] {488, 650, 813, 975};
+            for (int index = 0; index < 4; ++index)
+            {
+                selector->setSelectedItemIndex (index, juce::sendNotificationSync);
+                const auto factor = static_cast<float> (percentages[index]) / 100.0f;
+                CHECK (editor.getWidth() == widths[index]);
+                CHECK (editor.getHeight() == heights[index]);
+                CHECK (content->getWidth() == 960 && content->getHeight() == 650);
+                CHECK_NEAR (content->getTransform().mat00, factor, 0.001f);
+                CHECK (UiSettings (file).loadUiScalePercent() == percentages[index]);
+                const auto selectorArea = editor.getLocalArea (selector, selector->getLocalBounds());
+                CHECK (editor.getLocalBounds().contains (selectorArea));
+                auto* footer = findEditorChild (editor, "footerStatus");
+                CHECK (! selectorArea.intersects (editor.getLocalArea (footer, footer->getLocalBounds())));
+                auto* loop = findEditorChild (editor, "loopButton");
+                CHECK (editor.getLocalArea (loop, loop->getLocalBounds()).getRight() <= editor.getWidth() - 20);
+                const auto point = selectorArea.getCentre();
+                auto* hit = editor.getComponentAt (point);
+                CHECK (hit == selector || selector->isParentOf (hit));
+                for (const auto hostFactor : {1.25f, 1.5f})
+                {
+                    editor.setScaleFactor (hostFactor);
+                    const auto hostTransform = editor.getTransform();
+                    selector->setSelectedItemIndex ((index + 1) % 4, juce::sendNotificationSync);
+                    selector->setSelectedItemIndex (index, juce::sendNotificationSync);
+                    CHECK (editor.getTransform() == hostTransform);
+                    const auto origin = content->localPointToGlobal (juce::Point<float> (0.0f, 0.0f));
+                    const auto scaled = content->localPointToGlobal (juce::Point<float> (100.0f, 100.0f));
+                    CHECK_NEAR (scaled.x - origin.x, 100.0f * factor * hostFactor, 0.01f);
+                }
+                editor.setScaleFactor (1.0f);
+                const auto snapshotDir = juce::SystemStats::getEnvironmentVariable ("CHORDSCRIPT_UI_SNAPSHOT_DIR", {});
+                if (snapshotDir.isNotEmpty())
+                {
+                    const auto capture = [&] (const char* state)
+                    {
+                        const juce::File directory (snapshotDir);
+                        CHECK (directory.createDirectory().wasOk());
+                        const auto name = "ui-scale-" + juce::String (percentages[index]) + "-" + state + ".png";
+                        juce::FileOutputStream output (directory.getChildFile (name));
+                        CHECK (output.openedOk());
+                        output.setPosition (0);
+                        output.truncate();
+                        CHECK (juce::PNGImageFormat().writeImageToStream (
+                            editor.createComponentSnapshot (editor.getLocalBounds()), output));
+                    };
+                    capture ("valid");
+                    auto* text = dynamic_cast<juce::TextEditor*> (findEditorChild (editor, "progressionEditor"));
+                    auto* regenerate = dynamic_cast<juce::TextButton*> (findEditorChild (editor, "regenerateButton"));
+                    text->setText ("1645", juce::dontSendNotification);
+                    regenerate->triggerClick();
+                    juce::MessageManager::getInstance()->runDispatchLoopUntil (40);
+                    capture ("invalid");
+                    text->setText ("1(7), 6(7), 2(7), 5(7)", juce::dontSendNotification);
+                    regenerate->triggerClick();
+                    juce::MessageManager::getInstance()->runDispatchLoopUntil (40);
+                }
+            }
+        }
+    }
+
+    // Viewport scrolling uses logical coordinates and survives a scale change.
+    {
+        const auto file = juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("build/Tests/ui-settings").getChildFile (juce::Uuid().toString()).getChildFile ("scroll.json");
+        ChordTextAudioProcessor p;
+        juce::String progression;
+        for (int i = 0; i < 32; ++i) progression += "1, ";
+        p.setProgressionText (progression);
+        ChordTextAudioProcessorEditor editor (p, UiSettings (file));
+        auto* viewport = dynamic_cast<juce::Viewport*> (findEditorChild (editor, "chordSequence"));
+        auto* selector = dynamic_cast<juce::ComboBox*> (findEditorChild (editor, "uiScaleBox"));
+        CHECK (viewport->getViewedComponent()->getHeight() > viewport->getHeight());
+        viewport->setViewPosition (0, 90);
+        selector->setSelectedId (75, juce::sendNotificationSync);
+        CHECK (viewport->getViewPositionY() == 90);
+        selector->setSelectedId (150, juce::sendNotificationSync);
+        CHECK (viewport->getViewPositionY() == 90);
+        const auto visibleArea = editor.getLocalArea (viewport, viewport->getLocalBounds());
+        CHECK (editor.getLocalBounds().contains (visibleArea));
+    }
+
+    // Preference changes resize one editor; another editor reads them only on open.
+    {
+        const auto file = juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("build/Tests/ui-settings").getChildFile (juce::Uuid().toString()).getChildFile ("shared.json");
+        ChordTextAudioProcessor firstProcessor, secondProcessor;
+        ChordTextAudioProcessorEditor first (firstProcessor, UiSettings (file));
+        auto second = std::make_unique<ChordTextAudioProcessorEditor> (secondProcessor, UiSettings (file));
+        auto* selector = dynamic_cast<juce::ComboBox*> (findEditorChild (first, "uiScaleBox"));
+        auto* otherSelector = dynamic_cast<juce::ComboBox*> (findEditorChild (*second, "uiScaleBox"));
+        CHECK (selector != nullptr && otherSelector != nullptr);
+        if (selector && otherSelector)
+        {
+            juce::MemoryBlock before, after;
+            firstProcessor.getStateInformation (before);
+            selector->setSelectedId (125, juce::sendNotificationSync);
+            CHECK (first.getWidth() == 1200 && first.getHeight() == 813);
+            CHECK (second->getWidth() == 960 && otherSelector->getSelectedId() == 100);
+            firstProcessor.getStateInformation (after);
+            CHECK (before == after);
+            CHECK (! juce::AudioProcessor::getXmlFromBinary (after.getData(), static_cast<int> (after.getSize()))
+                        ->toString().contains ("uiScalePercent"));
+            CHECK (firstProcessor.getParameters().size() == 7);
+            firstProcessor.setStateInformation (before.getData(), static_cast<int> (before.getSize()));
+            CHECK (first.getWidth() == 1200 && selector->getSelectedId() == 125);
+            second.reset();
+            second = std::make_unique<ChordTextAudioProcessorEditor> (secondProcessor, UiSettings (file));
+            CHECK (second->getWidth() == 1200);
+            CHECK (UiSettings (file).saveUiScalePercent (75).wasOk());
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+            CHECK (first.getWidth() == 1200 && second->getWidth() == 1200);
+            second.reset();
+            second = std::make_unique<ChordTextAudioProcessorEditor> (secondProcessor, UiSettings (file));
+            CHECK (second->getWidth() == 720 && second->getHeight() == 488);
+        }
+    }
+
+    // A failed save leaves the selected zoom active and displays a local status error.
+    {
+        const auto directory = juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("build/Tests/ui-settings").getChildFile (juce::Uuid().toString());
+        CHECK (directory.createDirectory().wasOk());
+        const auto blocked = directory.getChildFile ("not-a-directory");
+        CHECK (blocked.replaceWithText ("keep"));
+        const UiSettings settings (blocked.getChildFile ("settings.json"));
+        ChordTextAudioProcessor p;
+        ChordTextAudioProcessorEditor editor (p, settings);
+        auto* selector = dynamic_cast<juce::ComboBox*> (findEditorChild (editor, "uiScaleBox"));
+        auto* clip = dynamic_cast<ClipDragComponent*> (findEditorChild (editor, "clipDrag"));
+        clip->onStatus ("Export failed: " + juce::String::repeatedString ("long-folder-name/", 100));
+        selector->setSelectedId (150, juce::sendNotificationSync);
+        CHECK (editor.getWidth() == 1440 && editor.getHeight() == 975);
+        auto* status = dynamic_cast<juce::Label*> (findEditorChild (editor, "footerStatus"));
+        CHECK (status->getText().contains ("UI scale was not saved"));
+        CHECK (status->getText().indexOf ("UI scale was not saved")
+               < status->getText().indexOf ("Export failed:"));
+        CHECK (p.getDiagnostics().empty());
+        CHECK (blocked.loadFileAsString() == "keep");
+        ChordTextAudioProcessorEditor reopened (p, settings);
+        CHECK (reopened.getWidth() == 960);
+    }
+
+    // Zoom preserves pending text and caret selection, then the normal debounce applies it.
+    {
+        const auto file = juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("build/Tests/ui-settings").getChildFile (juce::Uuid().toString()).getChildFile ("editing.json");
+        ChordTextAudioProcessor p;
+        ChordTextAudioProcessorEditor editor (p, UiSettings (file));
+        auto* text = dynamic_cast<juce::TextEditor*> (findEditorChild (editor, "progressionEditor"));
+        auto* selector = dynamic_cast<juce::ComboBox*> (findEditorChild (editor, "uiScaleBox"));
+        text->setText ("Dm7", true);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+        text->setHighlightedRegion ({1, 3});
+        const auto caret = text->getCaretPosition();
+        const auto selection = text->getHighlightedRegion();
+        selector->setSelectedId (75, juce::sendNotificationSync);
+        CHECK (text->getText() == "Dm7");
+        CHECK (text->getCaretPosition() == caret && text->getHighlightedRegion() == selection);
+        CHECK (p.getProgressionText() != "Dm7");
+        auto* status = dynamic_cast<juce::Label*> (findEditorChild (editor, "sequenceStatus"));
+        CHECK (status->getText() == "Updating preview");
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (250);
+        CHECK (p.getProgressionText() == "Dm7");
+        CHECK (p.getLearningRows().size() == 1 && p.getLearningRows()[0].chord == "Dm7");
+    }
+
+    // Changing UI scale does not publish a musical plan or retrigger an active chord.
+    {
+        const auto file = juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("build/Tests/ui-settings").getChildFile (juce::Uuid().toString()).getChildFile ("playback.json");
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("C:8");
+        FakePlayHead head;
+        head.set (0.0, true, 120.0);
+        p.setPlayHead (&head);
+        p.prepareToPlay (48000.0, 512);
+        ChordTextAudioProcessorEditor editor (p, UiSettings (file));
+        juce::AudioBuffer<float> audio (0, 512);
+        juce::MidiBuffer midi;
+        p.processBlock (audio, midi);
+        CHECK (noteOnPitches (midi).size() == 3);
+        auto* selector = dynamic_cast<juce::ComboBox*> (findEditorChild (editor, "uiScaleBox"));
+        selector->setSelectedId (150, juce::sendNotificationSync);
+        head.set (512.0 / 48000.0 * 2.0, true, 120.0);
+        p.processBlock (audio, midi);
+        CHECK (midi.isEmpty());
+        head.set (1024.0 / 48000.0 * 2.0, false, 120.0);
+        p.processBlock (audio, midi);
+        CHECK (countNoteOffs (midi) == 3);
+    }
 
     // The new selector preserves old normalization and restores old projects.
     {
@@ -208,9 +523,9 @@ int main()
     {
         ChordTextAudioProcessor p;
         p.setProgressionText ("1(7), 6(7), 2(7), 5(7)");
-        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
-        auto* selector = dynamic_cast<juce::ComboBox*> (editor->findChildWithID ("modeBox"));
-        auto* summary = dynamic_cast<juce::Label*> (editor->findChildWithID ("scaleSummary"));
+        std::unique_ptr<juce::AudioProcessorEditor> editor (createTestEditor (p));
+        auto* selector = dynamic_cast<juce::ComboBox*> (findEditorChild (*editor, "modeBox"));
+        auto* summary = dynamic_cast<juce::Label*> (findEditorChild (*editor, "scaleSummary"));
         CHECK (selector != nullptr);
         CHECK (summary != nullptr);
         const auto snapshotDir = juce::SystemStats::getEnvironmentVariable ("CHORDSCRIPT_UI_SNAPSHOT_DIR", {});
@@ -236,7 +551,7 @@ int main()
             CHECK (summary->getRight() <= editor->getWidth() - 28);
             CHECK (p.getLearningRows()[2].numericDegree == 2);
             CHECK (p.getLearningRows()[2].degree == "ii7");
-            auto* footer = dynamic_cast<juce::Label*> (editor->findChildWithID ("footerStatus"));
+            auto* footer = dynamic_cast<juce::Label*> (findEditorChild (*editor, "footerStatus"));
             CHECK (footer != nullptr && footer->getText() == juce::String::fromUTF8 ("4 chords \xc2\xb7 MIDI ready"));
             snapshot ("numeric-major.png");
             selector->setSelectedItemIndex (2, juce::sendNotificationSync);
@@ -251,16 +566,16 @@ int main()
             juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
             CHECK (summary->getText().contains ("Harmonic Minor"));
             CHECK (p.getLearningRows()[0].chord == "Cm7");
-            auto* status = dynamic_cast<juce::Label*> (editor->findChildWithID ("sequenceStatus"));
-            auto* errors = editor->findChildWithID ("diagnosticsDisplay");
+            auto* status = dynamic_cast<juce::Label*> (findEditorChild (*editor, "sequenceStatus"));
+            auto* errors = findEditorChild (*editor, "diagnosticsDisplay");
             CHECK (status != nullptr && status->getText() == "Last valid preview");
             CHECK (errors != nullptr && ! errors->getBounds().intersects (summary->getBounds()));
-            auto* staleSequence = editor->findChildWithID ("chordSequence");
+            auto* staleSequence = findEditorChild (*editor, "chordSequence");
             const auto staleImage = staleSequence->createComponentSnapshot (staleSequence->getLocalBounds());
             CHECK (staleImage.getPixelAt (10, 80).getRed() < 0x1d);
             snapshot ("numeric-invalid.png");
-            editor.reset (p.createEditor());
-            summary = dynamic_cast<juce::Label*> (editor->findChildWithID ("scaleSummary"));
+            editor.reset (createTestEditor (p));
+            summary = dynamic_cast<juce::Label*> (findEditorChild (*editor, "scaleSummary"));
             CHECK (summary != nullptr && summary->getText() == p.getScaleSummary());
         }
     }
@@ -952,7 +1267,7 @@ int main()
     // editor smoke test: fixed size, created by the processor
     {
         ChordTextAudioProcessor p;
-        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        std::unique_ptr<juce::AudioProcessorEditor> editor (createTestEditor (p));
         CHECK (editor != nullptr);
 
         if (editor != nullptr)
@@ -979,15 +1294,15 @@ int main()
     // editor exposes the new controls and can force a rebuild
     {
         ChordTextAudioProcessor p;
-        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        std::unique_ptr<juce::AudioProcessorEditor> editor (createTestEditor (p));
         CHECK (editor != nullptr);
         CHECK (editor->getWidth() == 960);
         CHECK (editor->getHeight() == 650);
 
         auto* progression = dynamic_cast<juce::TextEditor*> (
-            editor->findChildWithID ("progressionEditor"));
+            findEditorChild (*editor, "progressionEditor"));
         auto* regenerate = dynamic_cast<juce::TextButton*> (
-            editor->findChildWithID ("regenerateButton"));
+            findEditorChild (*editor, "regenerateButton"));
         CHECK (progression != nullptr);
         CHECK (regenerate != nullptr);
 
@@ -1014,10 +1329,10 @@ int main()
     // the sequence is exposed as a chord-card view
     {
         ChordTextAudioProcessor p;
-        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        std::unique_ptr<juce::AudioProcessorEditor> editor (createTestEditor (p));
         CHECK (editor != nullptr);
 
-        auto* sequence = editor->findChildWithID ("chordSequence");
+        auto* sequence = findEditorChild (*editor, "chordSequence");
         CHECK (sequence != nullptr);
 
         if (sequence != nullptr)
@@ -1030,25 +1345,25 @@ int main()
     // compact editor states keep diagnostics beside the editor and actions in sync
     {
         ChordTextAudioProcessor p;
-        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        std::unique_ptr<juce::AudioProcessorEditor> editor (createTestEditor (p));
         CHECK (editor != nullptr);
 
         auto* progression = dynamic_cast<juce::TextEditor*> (
-            editor->findChildWithID ("progressionEditor"));
+            findEditorChild (*editor, "progressionEditor"));
         auto* regenerate = dynamic_cast<juce::TextButton*> (
-            editor->findChildWithID ("regenerateButton"));
+            findEditorChild (*editor, "regenerateButton"));
         auto* diagnostics = dynamic_cast<juce::TextEditor*> (
-            editor->findChildWithID ("diagnosticsDisplay"));
+            findEditorChild (*editor, "diagnosticsDisplay"));
         auto* sequenceStatus = dynamic_cast<juce::Label*> (
-            editor->findChildWithID ("sequenceStatus"));
-        auto* sequence = editor->findChildWithID ("chordSequence");
+            findEditorChild (*editor, "sequenceStatus"));
+        auto* sequence = findEditorChild (*editor, "chordSequence");
         auto* exportButton = dynamic_cast<juce::TextButton*> (
-            editor->findChildWithID ("exportButton"));
+            findEditorChild (*editor, "exportButton"));
         auto* revealButton = dynamic_cast<juce::TextButton*> (
-            editor->findChildWithID ("revealFile"));
+            findEditorChild (*editor, "revealFile"));
         auto* clip = dynamic_cast<ClipDragComponent*> (
-            editor->findChildWithID ("clipDrag"));
-        auto* loop = editor->findChildWithID ("loopButton");
+            findEditorChild (*editor, "clipDrag"));
+        auto* loop = findEditorChild (*editor, "loopButton");
 
         CHECK (progression != nullptr);
         CHECK (regenerate != nullptr);
@@ -1106,9 +1421,9 @@ int main()
     // the editor distinguishes unavailable, stopped, and active transport states
     {
         ChordTextAudioProcessor p;
-        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        std::unique_ptr<juce::AudioProcessorEditor> editor (createTestEditor (p));
         auto* transport = dynamic_cast<juce::Label*> (
-            editor->findChildWithID ("transportStatus"));
+            findEditorChild (*editor, "transportStatus"));
         CHECK (transport != nullptr);
 
         if (transport != nullptr)
@@ -1136,11 +1451,11 @@ int main()
     // auto-parse applies an editor edit after the debounce
     {
         ChordTextAudioProcessor p;
-        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        std::unique_ptr<juce::AudioProcessorEditor> editor (createTestEditor (p));
         CHECK (editor != nullptr);
 
         auto* progression = dynamic_cast<juce::TextEditor*> (
-            editor->findChildWithID ("progressionEditor"));
+            findEditorChild (*editor, "progressionEditor"));
         CHECK (progression != nullptr);
 
         if (progression != nullptr)
@@ -1164,13 +1479,13 @@ int main()
     // Regenerate with unchanged text responds to a parameter change
     {
         ChordTextAudioProcessor p;
-        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        std::unique_ptr<juce::AudioProcessorEditor> editor (createTestEditor (p));
         CHECK (editor != nullptr);
 
         auto* progression = dynamic_cast<juce::TextEditor*> (
-            editor->findChildWithID ("progressionEditor"));
+            findEditorChild (*editor, "progressionEditor"));
         auto* regenerate = dynamic_cast<juce::TextButton*> (
-            editor->findChildWithID ("regenerateButton"));
+            findEditorChild (*editor, "regenerateButton"));
         CHECK (progression != nullptr);
         CHECK (regenerate != nullptr);
 
@@ -1308,15 +1623,15 @@ int main()
     // clip preview follows the timer-driven refresh path
     {
         ChordTextAudioProcessor p;
-        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        std::unique_ptr<juce::AudioProcessorEditor> editor (createTestEditor (p));
         CHECK (editor != nullptr);
 
         auto* clip = dynamic_cast<ClipDragComponent*> (
-            editor->findChildWithID ("clipDrag"));
+            findEditorChild (*editor, "clipDrag"));
         auto* progression = dynamic_cast<juce::TextEditor*> (
-            editor->findChildWithID ("progressionEditor"));
+            findEditorChild (*editor, "progressionEditor"));
         auto* regenerate = dynamic_cast<juce::TextButton*> (
-            editor->findChildWithID ("regenerateButton"));
+            findEditorChild (*editor, "regenerateButton"));
         CHECK (clip != nullptr);
         CHECK (progression != nullptr);
         CHECK (regenerate != nullptr);
@@ -1347,15 +1662,15 @@ int main()
     // clip preview creates a file, enables Reveal, and rejects invalid text
     {
         ChordTextAudioProcessor p;
-        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        std::unique_ptr<juce::AudioProcessorEditor> editor (createTestEditor (p));
         CHECK (editor != nullptr);
 
         auto* clip = dynamic_cast<ClipDragComponent*> (
-            editor->findChildWithID ("clipDrag"));
+            findEditorChild (*editor, "clipDrag"));
         auto* reveal = dynamic_cast<juce::TextButton*> (
-            editor->findChildWithID ("revealFile"));
+            findEditorChild (*editor, "revealFile"));
         auto* progression = dynamic_cast<juce::TextEditor*> (
-            editor->findChildWithID ("progressionEditor"));
+            findEditorChild (*editor, "progressionEditor"));
         CHECK (clip != nullptr);
         CHECK (reveal != nullptr);
         CHECK (progression != nullptr);

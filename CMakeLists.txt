@@ -34,6 +34,7 @@ set(CLI_CORE_SOURCES
     Source/Cli/CliRun.cpp
     Source/Cli/CliSession.cpp)
 set(PLUGIN_SOURCES
+    Source/Plugin/UiSettings.cpp
     Source/Plugin/PluginProcessor.cpp
     Source/Plugin/PluginEditor.cpp
     Source/Plugin/ClipDragComponent.cpp)
