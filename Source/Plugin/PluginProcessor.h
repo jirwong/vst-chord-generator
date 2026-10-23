@@ -88,6 +88,10 @@ public:
     void setStateInformation (const void*, int) override;
 
 private:
+    // Lets regression checks defer only the pending plan's delivery flag,
+    // reproducing legal mailbox ordering without timing-dependent threads.
+    friend struct ChordPreviewTestAccess;
+
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     void parameterChanged (const juce::String& parameterID, float newValue) override;

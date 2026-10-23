@@ -12,6 +12,21 @@
 #include <utility>
 #include <vector>
 
+struct ChordPreviewTestAccess
+{
+    static bool deferPendingPlan (ChordTextAudioProcessor& processor)
+    {
+        const auto previous = processor.sharedPlanIndex.fetch_and (
+            ~processor.freshPlanBit, std::memory_order_acq_rel);
+        return (previous & processor.freshPlanBit) != 0;
+    }
+
+    static void deliverPendingPlan (ChordTextAudioProcessor& processor)
+    {
+        processor.sharedPlanIndex.fetch_or (processor.freshPlanBit, std::memory_order_release);
+    }
+};
+
 namespace
 {
 class PreviewPlayHead : public juce::AudioPlayHead
@@ -623,6 +638,67 @@ void checkPreviewPlaybackPriority()
         CHECK (lastCOffIndex >= 0);
         CHECK (firstDmOnIndex >= 0);
         CHECK (lastCOffIndex < firstDmOnIndex);
+    }
+}
+
+void checkPreviewBeforeRebuiltPlanDelivery()
+{
+    for (const auto mode : {chordscript::PreviewMode::momentary, chordscript::PreviewMode::held})
+    {
+        PreviewPlayHead head;
+        head.setPosition (0.0, true, 120.0);
+        ChordTextAudioProcessor processor;
+        configureRootPosition (processor, "C, Dm");
+        processor.setPlayHead (&head);
+        processor.prepareToPlay (48000.0, 512);
+        CHECK ((pitches (renderBlock (processor), true) == std::vector<int> {48, 52, 55}));
+
+        processor.setProgressionText ("C, Dm, G");
+        const auto revision = processor.getPreviewCardRevision();
+        CHECK (revision != 0);
+
+        // Model a rebuild/request arriving after this block checked the plan
+        // mailbox but before it consumed the preview mailbox. Only the fresh
+        // flag is deferred: slot ownership and all payloads remain unchanged.
+        CHECK (ChordPreviewTestAccess::deferPendingPlan (processor));
+        chordscript::PreviewGestureId gesture = 0;
+        if (mode == chordscript::PreviewMode::momentary)
+        {
+            gesture = processor.beginMomentaryPreview (2, revision);
+            CHECK (gesture != 0);
+        }
+        else
+        {
+            processor.toggleHeldPreview (2, revision);
+        }
+
+        const auto started = renderBlock (processor);
+        CHECK ((pitches (started, false) == std::vector<int> {48, 52, 55}));
+        CHECK ((pitches (started, true) == std::vector<int> {55, 59, 62}));
+        CHECK (noteOffsPrecedeNoteOns (started));
+        const auto startedFeedback = processor.getPreviewFeedback();
+        CHECK (startedFeedback.mode == mode);
+        CHECK (startedFeedback.stepIndex == 2);
+
+        ChordPreviewTestAccess::deliverPendingPlan (processor);
+        head.setPosition (5.0, true, 120.0);
+        // Learning about the new progression must neither release nor
+        // retrigger the manual chord already sounding from that revision.
+        CHECK (renderBlock (processor).isEmpty());
+        const auto heldFeedback = processor.getPreviewFeedback();
+        CHECK (heldFeedback.mode == mode);
+        CHECK (heldFeedback.gestureId == startedFeedback.gestureId);
+
+        if (mode == chordscript::PreviewMode::momentary)
+            processor.endMomentaryPreview (gesture);
+        else
+            processor.toggleHeldPreview (2, revision);
+
+        const auto resumed = renderBlock (processor);
+        CHECK ((pitches (resumed, false) == std::vector<int> {55, 59, 62}));
+        CHECK ((pitches (resumed, true) == std::vector<int> {50, 53, 57}));
+        CHECK (noteOffsPrecedeNoteOns (resumed));
+        CHECK (processor.getPreviewFeedback().mode == chordscript::PreviewMode::idle);
     }
 }
 
@@ -1608,6 +1684,7 @@ void runChordPreviewChecks()
     checkMomentaryAndHeldPreview();
     checkPreviewReplacementAndCoalescing();
     checkPreviewPlaybackPriority();
+    checkPreviewBeforeRebuiltPlanDelivery();
     checkPreviewCancellation();
     checkPreviewTransportIndependence();
     checkPreviewStateAndFiles();

@@ -744,7 +744,11 @@ void ChordTextAudioProcessor::processBlock (juce::AudioBuffer<float>& audio,
     if (lastObservedGeneration != slot.generation)
     {
         lastObservedGeneration = slot.generation;
-        releaseActiveNotes (midi, 0);
+        // A preview request can arrive before its rebuilt plan is consumed.
+        // Preserve manual notes here; epoch/revision validation below decides
+        // whether that gesture should continue, be replaced, or be released.
+        if (appliedPreviewRequest.mode == chordscript::PreviewMode::idle)
+            releaseActiveNotes (midi, 0);
         hasExpectedBeat = false;
     }
 
