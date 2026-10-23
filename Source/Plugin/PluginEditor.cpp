@@ -51,12 +51,20 @@ juce::String formatBeats (double beats)
 
     return text;
 }
+
+void drawPin (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    g.setColour (juce::Colours::white.withAlpha (0.82f));
+    g.fillEllipse (area.getCentreX() - 3.0f, area.getY() + 1.0f, 6.0f, 6.0f);
+    g.drawLine (area.getCentreX(), area.getY() + 6.0f,
+                area.getCentreX(), area.getBottom() - 1.0f, 1.3f);
+}
 } // namespace
 
 ChordSequenceComponent::ChordSequenceComponent()
 {
     setComponentID ("chordSequence");
-    setScrollBarsShown (true, false);
+    content.setOwner (this);    setScrollBarsShown (true, false);
     setScrollBarThickness (8);
     getVerticalScrollBar().setColour (juce::ScrollBar::thumbColourId,
                                       outlineColour.brighter (0.15f));
@@ -82,17 +90,39 @@ void ChordSequenceComponent::resized()
 }
 
 void ChordSequenceComponent::setRows (std::vector<LearningRow> newRows, int currentStep,
-                                      bool stale)
+                                      bool stale, std::uint64_t displayedRevision)
 {
-    content.setRows (std::move (newRows), currentStep, stale);
+    content.setRows (std::move (newRows), currentStep, stale, displayedRevision);
     resized();
     repaint();
 }
 
-void ChordSequenceComponent::CardContent::setRows (std::vector<LearningRow> newRows,
-                                                    int newCurrentStep, bool isStale)
+void ChordSequenceComponent::setPreviewFeedback (chordscript::PreviewFeedback feedback)
 {
-    if (newRows.size() == rows.size() && newCurrentStep == currentStep && isStale == stale)
+    content.setPreviewFeedback (feedback);
+}
+
+juce::Rectangle<int> ChordSequenceComponent::cardBounds (int index) const
+{
+    return content.cardBounds (index);
+}
+
+int ChordSequenceComponent::cardAt (juce::Point<int> point) const
+{
+    return content.cardAt (point);
+}
+
+std::uint64_t ChordSequenceComponent::getDisplayedRevision() const
+{
+    return content.getDisplayedRevision();
+}
+
+void ChordSequenceComponent::CardContent::setRows (std::vector<LearningRow> newRows,
+                                                    int newCurrentStep, bool isStale,
+                                                    std::uint64_t newDisplayedRevision)
+{
+    if (newRows.size() == rows.size() && newCurrentStep == currentStep && isStale == stale
+        && newDisplayedRevision == displayedRevision)
     {
         auto unchanged = true;
         for (std::size_t index = 0; index < rows.size(); ++index)
@@ -115,7 +145,24 @@ void ChordSequenceComponent::CardContent::setRows (std::vector<LearningRow> newR
     rows = std::move (newRows);
     currentStep = newCurrentStep;
     stale = isStale;
+    displayedRevision = newDisplayedRevision;
     resized();
+    repaint();
+}
+
+void ChordSequenceComponent::CardContent::setPreviewFeedback (
+    chordscript::PreviewFeedback feedback)
+{
+    if (feedback.mode == previewFeedback.mode
+        && feedback.stepIndex == previewFeedback.stepIndex
+        && feedback.gestureId == previewFeedback.gestureId
+        && feedback.cancellationEpoch == previewFeedback.cancellationEpoch
+        && feedback.dataRevision == previewFeedback.dataRevision)
+    {
+        return;
+    }
+
+    previewFeedback = feedback;
     repaint();
 }
 
@@ -136,6 +183,74 @@ void ChordSequenceComponent::CardContent::resized()
     cardWidth = (availableWidth - (columnCount - 1) * sequenceCardGap) / columnCount;
 }
 
+juce::Rectangle<int> ChordSequenceComponent::CardContent::cardBounds (int index) const
+{
+    if (index < 0 || static_cast<std::size_t> (index) >= rows.size()
+        || cardWidth <= 0 || columnCount <= 0)
+    {
+        return {};
+    }
+
+    const auto column = index % columnCount;
+    const auto rowIndex = index / columnCount;
+    return juce::Rectangle<int> (column * (cardWidth + sequenceCardGap),
+                                 rowIndex * (sequenceCardHeight + sequenceCardGap),
+                                 cardWidth, sequenceCardHeight);
+}
+
+int ChordSequenceComponent::CardContent::cardAt (juce::Point<int> point) const
+{
+    for (std::size_t index = 0; index < rows.size(); ++index)
+        if (cardBounds (static_cast<int> (index)).contains (point))
+            return static_cast<int> (index);
+
+    return -1;
+}
+
+void ChordSequenceComponent::CardContent::mouseDown (const juce::MouseEvent& event)
+{
+    if (stale || rows.empty() || displayedRevision == 0)
+        return;
+
+    const auto index = cardAt (event.getPosition());
+    if (index < 0)
+        return;
+
+    if (event.mods.isPopupMenu())
+    {
+        if (owner != nullptr && owner->onToggleHeldPreview)
+            owner->onToggleHeldPreview (index, displayedRevision);
+        return;
+    }
+
+    if (event.mods.isLeftButtonDown() && owner != nullptr && owner->onMomentaryPreview)
+    {
+        const auto gestureId = owner->onMomentaryPreview (index, displayedRevision);
+        if (gestureId != 0)
+        {
+            // Keep press identities in order. A delayed release then ends the
+            // gesture that started it instead of a newer replacement.
+            if (momentaryGestureIds.size() >= 32)
+                momentaryGestureIds.erase (momentaryGestureIds.begin());
+            momentaryGestureIds.push_back (gestureId);
+        }
+    }
+}
+
+void ChordSequenceComponent::CardContent::mouseUp (const juce::MouseEvent&)
+{
+    // JUCE synthesizes a mouse-up on Windows when capture is lost. Releasing
+    // the queued identity lets that path end only the gesture that started it.
+    if (momentaryGestureIds.empty())
+        return;
+
+    const auto gestureId = momentaryGestureIds.front();
+    momentaryGestureIds.erase (momentaryGestureIds.begin());
+
+    if (owner != nullptr && owner->onMomentaryRelease)
+        owner->onMomentaryRelease (gestureId);
+}
+
 void ChordSequenceComponent::CardContent::paint (juce::Graphics& g)
 {
     g.fillAll (backgroundColour);
@@ -153,19 +268,20 @@ void ChordSequenceComponent::CardContent::paint (juce::Graphics& g)
     g.beginTransparencyLayer (stale ? 0.46f : 1.0f);
     for (std::size_t index = 0; index < rows.size(); ++index)
     {
-        const auto column = static_cast<int> (index) % columnCount;
-        const auto rowIndex = static_cast<int> (index) / columnCount;
-        auto card = juce::Rectangle<int> (column * (cardWidth + sequenceCardGap),
-                                          rowIndex * (sequenceCardHeight + sequenceCardGap),
-                                          cardWidth, sequenceCardHeight).toFloat();
-        const auto isCurrent = ! stale && static_cast<int> (index) == currentStep;
+        auto card = cardBounds (static_cast<int> (index)).toFloat();
+        const auto isManual = previewFeedback.mode != chordscript::PreviewMode::idle
+                              && static_cast<int> (index) == previewFeedback.stepIndex;
+        const auto isCurrent = ! stale
+                               && previewFeedback.mode == chordscript::PreviewMode::idle
+                               && static_cast<int> (index) == currentStep;
+        const auto isHighlighted = isManual || isCurrent;
 
-        g.setColour (isCurrent ? activeCardColour : panelColour);
+        g.setColour (isHighlighted ? activeCardColour : panelColour);
         g.fillRoundedRectangle (card, 9.0f);
-        g.setColour (isCurrent ? accentColour : outlineColour);
-        g.drawRoundedRectangle (card, 9.0f, isCurrent ? 1.4f : 1.0f);
+        g.setColour (isHighlighted ? accentColour : outlineColour);
+        g.drawRoundedRectangle (card, 9.0f, isHighlighted ? 1.4f : 1.0f);
 
-        if (isCurrent)
+        if (isHighlighted)
         {
             g.setColour (accentColour);
             g.fillRoundedRectangle (card.withHeight (4.0f).reduced (9.0f, 0.0f), 2.0f);
@@ -173,6 +289,36 @@ void ChordSequenceComponent::CardContent::paint (juce::Graphics& g)
 
         auto inner = card.toNearestInt().reduced (16, 12);
         auto titleRow = inner.removeFromTop (27);
+
+        if (isManual)
+        {
+            const auto badge = titleRow.removeFromRight (60)
+                                         .withSizeKeepingCentre (58, 16).toFloat();
+            g.setColour (accentColour.withAlpha (0.16f));
+            g.fillRoundedRectangle (badge, 4.0f);
+
+            auto badgeContent = badge.reduced (6.0f, 2.0f);
+            if (previewFeedback.mode == chordscript::PreviewMode::held)
+            {
+                drawPin (g, badgeContent.removeFromLeft (10).reduced (1.0f, 1.0f));
+                badgeContent.removeFromLeft (3.0f);
+            }
+
+            g.setColour (accentColour);
+            g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
+            g.drawFittedText (previewFeedback.mode == chordscript::PreviewMode::held ? "HELD"
+                                                                                     : "PREVIEW",
+                              badgeContent.toNearestInt(), juce::Justification::centred, 1);
+        }
+        else if (isCurrent)
+        {
+            const auto badge = titleRow.removeFromRight (60)
+                                        .withSizeKeepingCentre (58, 16).toFloat();
+            g.setColour (accentColour);
+            g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
+            g.drawText ("PLAYING", badge, juce::Justification::centredRight, false);
+        }
+
         g.setColour (textColour);
         g.setFont (juce::Font (juce::FontOptions (18.0f, juce::Font::bold)));
         g.drawFittedText (rows[index].chord, titleRow,
@@ -225,6 +371,9 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     configureLabel (velocityLabel, "VELOCITY", dimTextColour, 11.0f);
     configureLabel (sequenceLabel, "CHORD SEQUENCE", dimTextColour, 11.0f);
     configureLabel (sequenceMetaLabel, {}, dimTextColour, 11.0f);
+    configureLabel (previewHintLabel,
+                    juce::String::fromUTF8 ("Left press to preview \xc2\xb7 Right-click to hold"),
+                    dimTextColour, 10.0f);
     configureLabel (sequenceStatusLabel, {}, accentColour, 11.0f);
     configureLabel (statusLabel, {}, dimTextColour, 11.0f);
     configureLabel (uiScaleLabel, "UI SCALE", dimTextColour, 11.0f);
@@ -263,6 +412,7 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     progressionEditor.onTextChange = [this]
     {
         textEditPending = true;
+        processor.setPreviewInputPending (true);
         lastTextEditMs = juce::Time::getMillisecondCounterHiRes();
         refreshStatus();
     };
@@ -346,7 +496,9 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     clipDrag.setComponentID ("clipDrag");
     clipDrag.createClipFile = [this]
     {
-        applyProgressionText (true);
+        // Apply a pending edit and any pending musical-parameter rebuild, but
+        // leave a coherent unchanged plan alone so a drag cannot cancel a hold.
+        applyProgressionText (processor.isPlanRebuildPending());
 
         if (! processor.getDiagnostics().empty())
         {
@@ -375,7 +527,21 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     sequenceStatusLabel.setComponentID ("sequenceStatus");
     sequenceLabel.setComponentID ("sequenceLabel");
     sequenceMetaLabel.setComponentID ("sequenceMeta");
+    previewHintLabel.setComponentID ("previewHint");
+    previewHintLabel.setInterceptsMouseClicks (false, false);
     sequenceView.setComponentID ("chordSequence");
+    sequenceView.onMomentaryPreview = [this] (int stepIndex, std::uint64_t displayedRevision)
+    {
+        return processor.beginMomentaryPreview (stepIndex, displayedRevision);
+    };
+    sequenceView.onMomentaryRelease = [this] (chordscript::PreviewGestureId gestureId)
+    {
+        processor.endMomentaryPreview (gestureId);
+    };
+    sequenceView.onToggleHeldPreview = [this] (int stepIndex, std::uint64_t displayedRevision)
+    {
+        processor.toggleHeldPreview (stepIndex, displayedRevision);
+    };
     brandLabel.setComponentID ("brandLabel");
     transportStatusLabel.setComponentID ("transportStatus");
     statusLabel.setComponentID ("footerStatus");
@@ -400,6 +566,7 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     editorContent.addAndMakeVisible (clipDrag);
     editorContent.addAndMakeVisible (sequenceLabel);
     editorContent.addAndMakeVisible (sequenceMetaLabel);
+    editorContent.addAndMakeVisible (previewHintLabel);
     editorContent.addAndMakeVisible (sequenceStatusLabel);
     editorContent.addAndMakeVisible (statusLabel);
     editorContent.addAndMakeVisible (diagnosticsDisplay);
@@ -424,6 +591,10 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
 ChordTextAudioProcessorEditor::~ChordTextAudioProcessorEditor()
 {
     stopTimer();
+
+    // Cancel the preview before flushing a pending debounced edit.
+    processor.cancelChordPreview();
+    processor.setPreviewInputPending (false);
 
     // Do not lose a pending debounced edit when the editor closes.
     if (textEditPending)
@@ -543,8 +714,9 @@ void ChordTextAudioProcessorEditor::layoutContent()
     auto sequenceHeader = content.removeFromTop (sequenceHeaderHeight);
     const auto sequenceHeaderY = sequenceHeader.getY();
     sequenceLabel.setBounds (sequenceHeader.removeFromTop (17));
-    sequenceMetaLabel.setBounds (sequenceHeader);
     sequenceStatusLabel.setBounds (editorWidth - 228, sequenceHeaderY + 1, 200, 23);
+    sequenceMetaLabel.setBounds (sequenceHeader.removeFromLeft (170));
+    previewHintLabel.setBounds (sequenceHeader.removeFromLeft (330).reduced (0, 2));
 
     sequenceView.setBounds (content.removeFromTop (sequenceHeight));
     content.removeFromBottom (actionGap);
@@ -573,6 +745,8 @@ void ChordTextAudioProcessorEditor::applyProgressionText (bool force)
 
     if (force || text != processor.getProgressionText())
         processor.setProgressionText (text);
+
+    processor.setPreviewInputPending (false);
 }
 
 void ChordTextAudioProcessorEditor::startExport()
@@ -659,12 +833,23 @@ void ChordTextAudioProcessorEditor::refreshStatus()
     if (diagnosticsDisplay.isVisible() != shouldShowDiagnostics)
         diagnosticsDisplay.setVisible (shouldShowDiagnostics);
 
+    const auto previewFeedback = processor.getPreviewFeedback();
+    const auto previewCardRevision = processor.getPreviewCardRevision();
+    const auto previewChord = previewFeedback.stepIndex >= 0
+                                  && static_cast<std::size_t> (previewFeedback.stepIndex) < rows.size()
+                              ? rows[static_cast<std::size_t> (previewFeedback.stepIndex)].chord
+                              : juce::String();
+
     const auto sequenceStatus = textEditPending ? juce::String ("Updating preview")
-                                : ! diagnostics.empty()
-                                    ? rows.empty() ? juce::String ("Fix progression errors")
-                                                   : juce::String ("Last valid preview")
-                                : rows.empty() ? juce::String ("Enter a progression")
-                                               : juce::String::fromUTF8 ("\xe2\x9c\x93  Valid progression");
+                               : ! diagnostics.empty()
+                                   ? rows.empty() ? juce::String ("Fix progression errors")
+                                                  : juce::String ("Last valid preview")
+                               : rows.empty() ? juce::String ("Enter a progression")
+                               : previewFeedback.mode == chordscript::PreviewMode::held
+                                   ? previewChord + juce::String::fromUTF8 (" held \xc2\xb7 Right-click again to release")
+                               : previewFeedback.mode == chordscript::PreviewMode::momentary
+                                   ? previewChord + juce::String::fromUTF8 (" preview \xc2\xb7 Release to stop")
+                               : juce::String::fromUTF8 ("\xe2\x9c\x93  Valid progression");
     if (sequenceStatusLabel.getText() != sequenceStatus)
         sequenceStatusLabel.setText (sequenceStatus, juce::dontSendNotification);
     const auto sequenceStatusColour = textEditPending ? juce::Colour (0xffd5aa61)
@@ -684,7 +869,8 @@ void ChordTextAudioProcessorEditor::refreshStatus()
     if (sequenceMetaLabel.getText() != sequenceMeta)
         sequenceMetaLabel.setText (sequenceMeta, juce::dontSendNotification);
     sequenceView.setRows (rows, processor.getCurrentStep(),
-                          textEditPending || ! diagnostics.empty());
+                          textEditPending || ! diagnostics.empty(), previewCardRevision);
+    sequenceView.setPreviewFeedback (previewFeedback);
     refreshTransportStatus();
 
     const bool canDrag = ! textEditPending && diagnostics.empty() && ! rows.empty();

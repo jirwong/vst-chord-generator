@@ -4,6 +4,8 @@
 #include "PluginProcessor.h"
 #include "UiSettings.h"
 
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -14,22 +16,44 @@ public:
     ~ChordSequenceComponent() override;
 
     void resized() override;
-    void setRows (std::vector<LearningRow> newRows, int currentStep, bool stale);
+    void setRows (std::vector<LearningRow> newRows, int currentStep, bool stale,
+                  std::uint64_t displayedRevision);
+    void setPreviewFeedback (chordscript::PreviewFeedback feedback);
+
+    juce::Rectangle<int> cardBounds (int index) const;
+    int cardAt (juce::Point<int> point) const;
+    std::uint64_t getDisplayedRevision() const;
+
+    std::function<chordscript::PreviewGestureId (int, std::uint64_t)> onMomentaryPreview;
+    std::function<void (chordscript::PreviewGestureId)> onMomentaryRelease;
+    std::function<void (int, std::uint64_t)> onToggleHeldPreview;
 
 private:
     class CardContent final : public juce::Component
     {
     public:
-        void setRows (std::vector<LearningRow> newRows, int currentStep, bool stale);
+        void setRows (std::vector<LearningRow> newRows, int currentStep, bool stale,
+                      std::uint64_t displayedRevision);
+        void setPreviewFeedback (chordscript::PreviewFeedback feedback);
         void resized() override;
         void paint (juce::Graphics&) override;
+        void mouseDown (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override;
 
         int getContentHeightForWidth (int width) const;
+        juce::Rectangle<int> cardBounds (int index) const;
+        int cardAt (juce::Point<int> point) const;
+        void setOwner (ChordSequenceComponent* newOwner) { owner = newOwner; }
+        std::uint64_t getDisplayedRevision() const { return displayedRevision; }
 
     private:
         std::vector<LearningRow> rows;
         int currentStep = -1;
         bool stale = false;
+        std::uint64_t displayedRevision = 0;
+        chordscript::PreviewFeedback previewFeedback;
+        std::vector<chordscript::PreviewGestureId> momentaryGestureIds;
+        ChordSequenceComponent* owner = nullptr;
         int columnCount = 1;
         int cardWidth = 0;
     };
@@ -97,6 +121,7 @@ private:
     ClipDragComponent clipDrag;
     juce::Label sequenceLabel;
     juce::Label sequenceMetaLabel;
+    juce::Label previewHintLabel;
     juce::Label sequenceStatusLabel;
     juce::Label statusLabel;
     juce::TextEditor diagnosticsDisplay;
