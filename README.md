@@ -9,6 +9,8 @@ each chord's functional degree, spelled chord tones, and duration in beats.
 The plugin produces MIDI only. It has no audio output and no built-in synth, so it
 must be routed to an instrument in the host.
 
+For the full syntax reference, see [SYNTAX.md](SYNTAX.md).
+
 ## Prerequisites
 
 - Windows 10 or 11, 64-bit.
@@ -169,170 +171,27 @@ disables export and dragging.
 
 ## Syntax reference
 
-### Progressions and separators
+The full, canonical syntax guide is [SYNTAX.md](SYNTAX.md). It covers
+progressions and separators, durations, absolute chords and aliases,
+alterations, slash bass, Roman numerals, keys, grammar, diagnostics, and common
+mistakes.
 
-A progression is a sequence of chord tokens. Tokens may be separated by any of:
-
-- commas: `C, Am7, F, G`
-- spaces or tabs: `C Am7 F G`
-- newlines:
-
-  ```text
-  C
-  Am7
-  F
-  G
-  ```
-
-- vertical bars: `C | Am7 | F | G`
-- hyphens: `C-Am7-F-G`
-
-Separators may be mixed. Repeated separators and leading or trailing separators are
-ignored. `|` and `-` are visual separators only; they do not force a bar boundary
-and do not change timing.
-
-Empty text, or text containing only separators, is valid and produces an empty plan
-with no notes and no errors. Absolute and Roman-numeral tokens may be mixed in one
-progression.
-
-> A hyphen is **not** a minor-quality alias. `C-E-G` means three chords (C, E, G),
-> not C minor. Write `Cm` or `Cmin` for C minor.
-
-### Durations
-
-Every chord lasts 4 beats by default. Add `:N` to set the duration in beats:
+Quick examples:
 
 ```text
-Cmaj7:2, Am7:1.5, Dm7:8, G7
+Cmaj7, Am7, Dm7, G7
+i-iv-V
+C:8, Am7:4, F:4, G:4
+C/E, F#m7b5/C
 ```
 
-- `N` must be a positive, finite number; fractional values are allowed.
-- Zero, negative values, NaN, infinity, and malformed values are errors.
-- Durations affect both live playback and export. The loop length is the sum of all
-  chord durations.
-- A chord's note-on occurs at its start beat and its note-off at start + duration.
+Every chord lasts 4 beats by default, and separators can be mixed. Absolute
+chords and Roman numerals can be used in the same progression. The plugin
+editor and `chordtext-cli` share the parser, so the same text produces the same
+result in both. To check syntax without a DAW, run `chordtext-cli "C, H"`.
 
-### Absolute chord symbols
-
-```text
-chord       := root quality? alteration* ("/" bass)?
-root        := [A-G] ("#" | "b")?
-bass        := [A-G] ("#" | "b")?
-alteration  := ("b" | "#") ("5" | "9")
-```
-
-Root and bass letters are uppercase `A` through `G`. Root spelling from the input is
-preserved: `C#` major is spelled C#–E#–G#, and `G#maj7` contains F##. Octave and MIDI
-pitch are chosen by the voicer.
-
-#### Supported qualities and aliases
-
-| Category | Spellings |
-|---|---|
-| Major triad | *(empty)* |
-| Minor triad | `m`, `min` |
-| Diminished triad | `dim`, `o`, `°` |
-| Augmented triad | `aug`, `+` |
-| Suspended | `sus2`, `sus4` |
-| Power chord | `5` |
-| Sixth | `6`; minor `m6`, `min6` |
-| Seventh | `7`, `maj7`, `M7`, `m7`, `min7`, `mMaj7`, `minMaj7`, `dim7`, `o7`, `°7`, `m7b5`, `ø7`, `7sus4` |
-| Ninth | `9`, `maj9`, `M9`, `m9`, `min9`, `add9`, `9sus4` |
-
-Qualities are matched longest-first, so `maj7` is not read as `m` plus `aj7`.
-
-#### Alterations
-
-`b5`, `#5`, `b9`, and `#9` may follow the quality, in any order and in any
-combination:
-
-```text
-C7b9
-C7#9
-Cm7b5
-C7#5b9
-```
-
-`b5`/`#5` alter the fifth and `b9`/`#9` alter the ninth; if the base quality does
-not contain that degree, the altered tone is added. `add9` adds the ninth without a
-seventh.
-
-#### Slash bass
-
-Add `/` and a bass note to fix the lowest note:
-
-```text
-C/E
-Am7/G
-F#m7b5/C
-```
-
-The slash bass is always the lowest note; the remaining chord tones are voiced above
-it. Slash bass is supported on absolute chords, not on Roman numerals.
-
-#### Root accidental precedence: `Cb5`
-
-The parser consumes a root accidental immediately after the root letter, before
-reading the quality. Therefore `Cb5` is the **C-flat power chord** (Cb plus its
-fifth), not "C with a flat fifth". Likewise `C#5` is the C-sharp power chord.
-
-Write alterations only after an explicit quality, for example `C7b5`, `Cm7b5`, or
-`C7#5`. Parenthesised forms such as `C(b5)` are not supported.
-
-#### Unsupported absolute tokens
-
-Unknown or ambiguous tokens are errors, not guesses. Examples: `C99`, `C11`, `C13`,
-`C6/9`, and `H`.
-
-### Roman numerals
-
-```text
-degree      := accidental? numeral quality? alteration*
-accidental  := "b" | "#"
-numeral     := "I" | "II" | "III" | "IV" | "V" | "VI" | "VII"
-```
-
-- Case sets the default triad quality: uppercase is major, lowercase is minor.
-- `°` or `o` makes the triad diminished; `+` makes it augmented.
-- An explicit quality suffix overrides the case default, using the same vocabulary as
-  absolute chords. Bare extensions follow the case: lowercase `ii7` is a minor
-  seventh, while uppercase `V7` is a dominant seventh.
-- `b` and `#` before the numeral alter the scale-degree root chromatically.
-- Slash bass and applied/secondary numerals such as `V/V` are not supported in v1.
-
-Examples in C major:
-
-```text
-I       -> C
-ii      -> Dm
-V7      -> G7
-IVmaj7  -> Fmaj7
-bVII    -> Bb
-#iv     -> F#m
-```
-
-Examples in A minor:
-
-```text
-i       -> Am
-iv      -> Dm
-V       -> E
-V7      -> E7
-vii°    -> Gdim
-#vii°   -> G#dim
-```
-
-Minor keys use natural-minor spelling for scale degrees. Chromatic notes come from
-accidentals or from the chord quality itself. In A minor, `V` is E–G#–B, with the G#
-spelled correctly; `vii°` uses the natural-minor G.
-
-### Key selector
-
-The key selector supplies the tonic spelling and the major/minor mode. It always
-matters for Roman numerals and for the Degree column of the learning table. It does
-**not** transpose or alter absolute chord symbols: `C` is C major regardless of the
-selected key. Selectable tonics are C, C#, Db, D, D#, Eb, E, F, F#, Gb, G, G#, Ab, A,
-A#, Bb, and B, in major or minor.
+The key selector matters for Roman numerals and the Degree column; it does not
+transpose absolute chords.
 
 ### The learning table
 
@@ -359,17 +218,12 @@ The table continues to show the last valid progression while the text is invalid
 
 ### Errors and diagnostics
 
-Every parse error identifies the failing token, a zero-based character offset into
-the progression text, and a short message. The editor shows every diagnostic, one
-per line, in a scrollable area below the learning table:
-
-```text
-Error at character 12: unknown extension "99" (Emin99)
-```
-
-If any token is invalid, no new plan is published. The last valid progression keeps
-playing, and the table continues to show it. Export is disabled while errors are
-present.
+Every parse error identifies the failing token, a zero-based character offset
+into the progression text, and a short message; the editor lists them below the
+learning table. If any token is invalid, no new plan is published: the last
+valid progression keeps playing, the table continues to show it, and export is
+disabled. See [SYNTAX.md](SYNTAX.md#6-errors-and-diagnostics) for the exact
+format and examples.
 
 ## Controls and saved state
 
@@ -802,7 +656,8 @@ Known limitations in v1:
 - MIDI input is accepted for host compatibility but ignored.
 - Slash bass and applied chords (`V/V`) are unsupported on Roman numerals.
 - Parenthesised alterations are unsupported, and `Cb5`/`C#5` are read as root
-  accidentals before the `5` quality (see above).
+  accidentals before the `5` quality; see
+  [SYNTAX.md](SYNTAX.md#36-root-accidental-precedence-cb5).
 - Each upper chord tone sounds once, but a slash bass may duplicate its pitch class
   an octave below (for example, `C/E`). There is no other octave doubling and no
   rootless voicing.
@@ -915,6 +770,7 @@ anything that affects this plugin; it is not required to build or use Chord Text
 ```text
 CMakeLists.txt              plugin, test executables, JUCE subdirectory
 README.md                   this document
+SYNTAX.md                   canonical chord and progression syntax guide
 build.sh / build.bat        configure/build/test wrappers
 Source/Theory/              JUCE-free notes, keys, chords, parsers, voicing, render plan,
                             MIDI file writer
