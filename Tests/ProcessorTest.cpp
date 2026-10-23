@@ -557,7 +557,11 @@ int main()
             CHECK (footer != nullptr && footer->getText() == juce::String::fromUTF8 ("4 chords \xc2\xb7 MIDI ready"));
             snapshot ("numeric-major.png");
             selector->setSelectedItemIndex (2, juce::sendNotificationSync);
-            juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+            for (int attempt = 0; attempt < 50
+                 && ! summary->getText().contains ("C Dorian"); ++attempt)
+            {
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
+            }
             CHECK (choiceIndex (p, "scaleMode") == 2);
             CHECK (p.getLearningRows()[0].chord == "Cm7");
             CHECK (summary->getText().contains ("C Dorian"));

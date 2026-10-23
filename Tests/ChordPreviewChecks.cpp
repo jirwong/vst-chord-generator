@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -1379,6 +1380,58 @@ void checkPreviewScaledAndScrolledCards()
     CHECK (processor.getPreviewFeedback().mode == chordscript::PreviewMode::idle);
 }
 
+void checkPreviewBadgePadding()
+{
+    ChordSequenceComponent sequence;
+    sequence.setSize (900, 160);
+    std::vector<LearningRow> rows (1);
+    rows[0].chord = "Cmaj7";
+    sequence.setRows (rows, -1, false, 1);
+    auto* content = sequence.getViewedComponent();
+    CHECK (content != nullptr);
+    if (content == nullptr)
+        return;
+
+    for (const auto mode : {chordscript::PreviewMode::momentary, chordscript::PreviewMode::held})
+    {
+        chordscript::PreviewFeedback feedback;
+        feedback.mode = mode;
+        feedback.stepIndex = 0;
+        feedback.gestureId = 1;
+        sequence.setPreviewFeedback (feedback);
+
+        for (const auto scale : {0.75f, 1.0f, 1.25f, 1.5f})
+        {
+            const auto snapshot = content->createComponentSnapshot (
+                content->getLocalBounds(), true, scale);
+            // The pill ends 17 logical pixels inside the card. Its final
+            // four pixels must remain padding, not touch the label's ink.
+            const auto card = sequence.cardBounds (0);
+            const auto pillRight = card.getRight() - 17;
+            const auto pillTop = card.getY() + 17;
+            auto paddingHasInk = false;
+            auto labelHasInk = false;
+            for (auto y = static_cast<int> (std::ceil (pillTop * scale));
+                 y < static_cast<int> (std::floor ((pillTop + 16) * scale)); ++y)
+            {
+                for (auto x = static_cast<int> (std::ceil ((pillRight - 58) * scale));
+                     x < static_cast<int> (std::floor (pillRight * scale)); ++x)
+                {
+                    const auto pixel = snapshot.getPixelAt (x, y);
+                    const auto isInk = pixel.getRed() > 65 && pixel.getGreen() > 130
+                                       && pixel.getBlue() > 120
+                                       && pixel.getGreen() - pixel.getRed() > 35;
+                    labelHasInk = labelHasInk || isInk;
+                    if (x >= static_cast<int> (std::ceil ((pillRight - 4) * scale)))
+                        paddingHasInk = paddingHasInk || isInk;
+                }
+            }
+            CHECK (labelHasInk);
+            CHECK (! paddingHasInk);
+        }
+    }
+}
+
 void checkPreviewDisplayedRevision()
 {
     const auto file = juce::File::getCurrentWorkingDirectory()
@@ -1659,6 +1712,17 @@ void checkPreviewEditorCleanup()
         CHECK (sequence != nullptr);
         if (sequence == nullptr)
             return;
+        // A deferred rebuild can finish before the editor's next timer tick.
+        // Wait for the displayed revision, not an assumed 60 ms refresh time.
+        for (int attempt = 0; attempt < 50
+             && (sequence->getDisplayedRevision() == 0
+                 || sequence->getDisplayedRevision() != processor.getPreviewCardRevision());
+             ++attempt)
+        {
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
+        }
+        CHECK (sequence->getDisplayedRevision() != 0
+               && sequence->getDisplayedRevision() == processor.getPreviewCardRevision());
         auto* content = sequence->getViewedComponent();
         const auto centre = sequence->cardBounds (0).getCentre();
 
@@ -1690,6 +1754,7 @@ void runChordPreviewChecks()
     checkPreviewStateAndFiles();
     checkPreviewCardGestures();
     checkPreviewScaledAndScrolledCards();
+    checkPreviewBadgePadding();
     checkPreviewDisplayedRevision();
     checkPreviewEditorCleanup();
 }

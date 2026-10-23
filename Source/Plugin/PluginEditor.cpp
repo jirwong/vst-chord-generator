@@ -292,19 +292,23 @@ void ChordSequenceComponent::CardContent::paint (juce::Graphics& g)
 
         if (isManual)
         {
-            auto badge = titleRow.removeFromRight (60)
-                                   .withSizeKeepingCentre (58, 16).toFloat();
+            const auto badge = titleRow.removeFromRight (60)
+                                         .withSizeKeepingCentre (58, 16).toFloat();
             g.setColour (accentColour.withAlpha (0.16f));
             g.fillRoundedRectangle (badge, 4.0f);
 
+            auto badgeContent = badge.reduced (6.0f, 2.0f);
             if (previewFeedback.mode == chordscript::PreviewMode::held)
-                drawPin (g, badge.removeFromLeft (14).reduced (4.0f, 2.0f));
+            {
+                drawPin (g, badgeContent.removeFromLeft (10).reduced (1.0f, 1.0f));
+                badgeContent.removeFromLeft (3.0f);
+            }
 
             g.setColour (accentColour);
             g.setFont (juce::Font (juce::FontOptions (10.0f, juce::Font::bold)));
-            g.drawText (previewFeedback.mode == chordscript::PreviewMode::held ? "HELD"
-                                                                               : "PREVIEW",
-                        badge, juce::Justification::centredRight, false);
+            g.drawFittedText (previewFeedback.mode == chordscript::PreviewMode::held ? "HELD"
+                                                                                     : "PREVIEW",
+                              badgeContent.toNearestInt(), juce::Justification::centred, 1);
         }
         else if (isCurrent)
         {
