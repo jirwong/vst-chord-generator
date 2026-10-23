@@ -71,7 +71,7 @@ std::string CliSettings::keyName() const
 
 std::string CliSettings::modeName() const
 {
-    return mode == Mode::major ? "major" : "minor";
+    return std::string (chordtext::modeName (mode));
 }
 
 std::string CliSettings::voicingName() const
@@ -120,11 +120,7 @@ std::optional<PitchClass> parseTonic (std::string_view text)
 
 std::optional<Mode> parseMode (std::string_view text)
 {
-    if (equalsIgnoreCase (text, "major"))
-        return Mode::major;
-    if (equalsIgnoreCase (text, "minor"))
-        return Mode::minor;
-    return std::nullopt;
+    return parseModeName (text);
 }
 
 std::optional<VoicingMode> parseVoicing (std::string_view text)

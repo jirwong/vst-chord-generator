@@ -65,7 +65,9 @@ std::string helpMessage (const CliSettings& settings)
     return
         "Commands:\n"
         "  :key <tonic>                    Set the key tonic (C, C#, Db, ...).\n"
-        "  :mode <major|minor>             Set the mode.\n"
+        "  :mode <mode>                    Set the scale. Choices:\n"
+        "    major, minor, dorian, phrygian, lydian, mixolydian, locrian,\n"
+        "    harmonic-minor, melodic-minor (ascending). Aliases: ionian, aeolian.\n"
         "  :voicing <voice-led|root-position>\n"
         "  :range <C2-C5|C3-C6|C4-C7>      Set the pitch range.\n"
         "  :velocity <1-127>               Set the note velocity.\n"
@@ -74,6 +76,7 @@ std::string helpMessage (const CliSettings& settings)
         "  :export <path>                  Write the last valid progression to MIDI.\n"
         "  :help                           Show this help.\n"
         "  :quit, :q                       Exit the session.\n"
+        "Chords: 1, 6, 4, 5. Use 2(7) for a scale seventh; :N sets beats.\n"
         + formatSettingsLine (settings) + "\n";
 }
 }

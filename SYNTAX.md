@@ -1,6 +1,6 @@
 # Chord Text — Syntax Guide
 
-Chord Text accepts chord symbols and Roman numerals. The plugin editor and the
+Chordscript accepts chord symbols, Roman numerals, and numeric scale degrees. The plugin editor and the
 `chordtext-cli` utility use the same parser, so this guide applies to both.
 The plugin produces MIDI only. The syntax determines which notes are generated.
 
@@ -11,6 +11,8 @@ Cmaj7, Am7, Dm7, G7       absolute chords
 i-iv-V                    Roman numerals
 Cmaj7:2, Am7:1.5, G7      durations in beats
 C/E, F#m7b5/C             slash bass
+1, 6, 4, 5                numeric scale triads
+1(7), 2(7), 5(7):8        numeric scale sevenths and durations
 ```
 
 - Every chord lasts **4 beats by default**.
@@ -46,7 +48,7 @@ Rules:
   change timing. Durations control timing.
 - Empty text, or text containing only separators, is valid. It produces an
   empty progression with no notes and no errors.
-- Absolute chords and Roman numerals may be mixed in one progression.
+- Absolute chords, Roman numerals, and numeric degrees may be mixed in one progression.
 
 > A hyphen is **not** a minor-quality alias. `C-E-G` means three chords
 > (C, E, G), not C minor. Write `Cm` or `Cmin` for C minor.
@@ -288,7 +290,9 @@ One accidental is typical. The parser also accepts repeated accidentals.
 The key selector supplies the tonic spelling and the major/minor mode.
 
 - The key always matters for Roman numerals.
-- Minor keys use natural-minor spelling for scale degrees.
+- Minor (Aeolian) uses natural-minor spelling for scale degrees.
+- Other modes use the selected scale's degree roots. Roman case and quality rules
+  do not change. In C Dorian, `III` is Eb major and `iii` is Eb minor.
 - Chromatic notes come from accidentals or from the chord quality itself.
 - In A minor, `V` is E–G#–B, with the G# spelled correctly. `vii°` uses the
   natural-minor G.
@@ -299,7 +303,7 @@ Selectable tonics are:
 C  C#  Db  D  D#  Eb  E  F  F#  Gb  G  G#  Ab  A  A#  Bb  B
 ```
 
-in major or minor.
+in any of the nine supported scales.
 
 The key selector does **not** transpose or alter absolute chord symbols. `C` is
 C major regardless of the selected key.
@@ -313,12 +317,89 @@ C major regardless of the selected key.
 
 | Setting | Affects syntax? | Notes |
 |---|---|---|
-| Key | Yes, for Roman numerals | Also affects the Degree column; absolute chords are unchanged |
-| Mode | Yes, for Roman numerals | Major or minor scale spelling |
+| Key | Yes, for Roman numerals and numeric degrees | Sets the tonic; absolute chord pitches are unchanged |
+| Mode | Yes, for Roman numerals and numeric degrees | Sets scale roots and numeric chord qualities |
 | Voicing | No | Changes the generated pitches, not the parse |
 | Range | No | Changes the generated octaves, not the parse |
 | Velocity | No | Changes MIDI velocity, not the parse |
 | Loop | No | Changes playback repetition, not the parse |
+
+### 5.1 Supported scales
+
+Key always sets the tonic. For example, Key C with Mode Dorian uses C Dorian.
+The scale summary shows the tonic, scale name, and seven notes.
+
+| Mode | Notes with tonic C | CLI name |
+|---|---|---|
+| Major (Ionian) | C D E F G A B | `major` |
+| Minor (Aeolian) | C D Eb F G Ab Bb | `minor` |
+| Dorian | C D Eb F G A Bb | `dorian` |
+| Phrygian | C Db Eb F G Ab Bb | `phrygian` |
+| Lydian | C D E F# G A B | `lydian` |
+| Mixolydian | C D E F G A Bb | `mixolydian` |
+| Locrian | C Db Eb F Gb Ab Bb | `locrian` |
+| Harmonic Minor | C D Eb F G Ab B | `harmonic-minor` |
+| Melodic Minor | C D Eb F G A B | `melodic-minor` |
+
+Melodic Minor always uses the ascending form. It does not change with melodic
+direction. CLI mode names are case-insensitive. `ionian` and `aeolian` are aliases
+for `major` and `minor`.
+
+### 5.2 Numeric scale chords
+
+Enter one degree from `1` to `7`. The plugin builds a triad from that scale.
+Add `(7)` to build a scale seventh. Each chord uses alternate scale notes from
+its root. The scale determines the chord quality.
+
+| Scale | Input | Result |
+|---|---|---|
+| C Major | `1, 2, 3, 4, 5, 6, 7` | C, Dm, Em, F, G, Am, Bdim |
+| A Minor | `1, 2, 3, 4, 5, 6, 7` | Am, Bdim, C, Dm, Em, F, G |
+| C Major | `1(7), 2(7), 5(7), 7(7)` | Cmaj7, Dm7, G7, Bm7b5 |
+| A Harmonic Minor | `1(7)` | AmMaj7: A C E G# |
+| A Harmonic Minor | `3(7)` | Cmaj7#5: C E G# B |
+| A Melodic Minor | `6(7)` | F#m7b5: F# A C E |
+
+Use the existing separators and duration syntax:
+
+```text
+1-6-4-5
+1:8, vi7, F, 5(7)
+2(7):8
+```
+
+Each chord lasts four beats by default. `2(7):8` lasts eight beats.
+The editor preserves your input. Numeric cards show the resolved chord and both
+degree forms, for example `Dm7` and `Degree 2 · ii7` in C Major.
+
+### 5.3 Explicit numeric chord quality
+
+Add a quality to select a different chord on the same scale root.
+
+| Quality | Accepted suffixes |
+|---|---|
+| Major triad | `maj` |
+| Minor triad | `m`, `min` |
+| Diminished triad | `dim`, `o`, `°` |
+| Augmented triad | `aug`, `+` |
+| Major seventh | `maj7` |
+| Minor seventh | `m7`, `min7` |
+| Dominant seventh | `dom7` |
+| Minor-major seventh | `mMaj7`, `minMaj7` |
+| Diminished seventh | `dim7`, `o7`, `°7` |
+| Half-diminished seventh | `m7b5`, `ø7` |
+| Augmented major seventh | `augMaj7` (displayed as `maj7#5`) |
+
+In A Minor, `5` is Em, `5maj` is E, and `5dom7` is E7. Roman `V` remains E
+because uppercase Roman numerals select a major chord.
+
+Use `(7)` for an automatic scale seventh. `27` is invalid. Separate degrees with
+spaces or commas: `2, 7`. Joined progressions such as `1645` are also invalid.
+
+Numeric syntax does not accept root accidentals (`b7`, `#4`), slash bass,
+general alterations, or ninths. `m7b5` is a complete quality suffix.
+`2maj(7)`, `2(7)m`, and `2(9)` are invalid. Existing absolute and Roman ninths
+remain available. Parentheses are valid only for `(7)` after a bare numeric degree.
 
 To check syntax without a DAW:
 
@@ -355,10 +436,10 @@ If any token is invalid:
 
 - no new plan is published;
 - the last valid progression keeps playing;
-- the learning table continues to show the last valid progression;
+- the chord cards show the last valid progression, with reduced brightness;
 - export and drag are disabled.
 
-The editor lists every diagnostic below the learning table. In one-shot mode,
+The editor lists diagnostics directly below the progression input. In one-shot mode,
 the CLI prints the same diagnostics and exits with code 1.
 
 An empty progression is valid and has no diagnostics.
@@ -370,7 +451,9 @@ progression := separator* (token separator*)*
 separator   := "," | "|" | "-" | whitespace
 token       := chord (":" duration)?
 duration    := positive finite number
-chord       := absolute | roman
+chord       := absolute | roman | numeric
+numeric     := [1-7] ("(7)" | numericQuality)?
+numericQuality := see section 5.3
 
 absolute    := root quality? alteration* ("/" bass)?
 root        := [A-G] ("#" | "b")?
@@ -406,7 +489,10 @@ Notes:
 | `C6/9` | The `6/9` chord is unsupported | `C6` or `Cadd9` |
 | `H` | `H` is not a note name here | `B` |
 | `C##` | Double accidentals are unsupported | `D` |
-| `C(b5)` | Parentheses are unsupported | `C7b5` or `Cm7b5` |
+| `C(b5)` | Absolute chord parentheses are unsupported | `C7b5` or `Cm7b5` |
+| `1645` | Numeric degrees need separators | `1, 6, 4, 5` |
+| `27` | A bare digit suffix is unsupported | `2(7)` for a seventh, or `2, 7` for two chords |
+| `8` | Numeric degrees must be 1 through 7 | `1` for the tonic |
 | `c` | Root letters must be uppercase | `C` |
 | `V/V` | Applied/secondary numerals are unsupported | Write the target chord absolutely |
 | `Cmaj7:0` | Durations must be positive | `Cmaj7:0.5` |

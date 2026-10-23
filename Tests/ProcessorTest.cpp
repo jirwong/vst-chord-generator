@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <memory>
 #include <vector>
+#include <thread>
 
 class FakePlayHead : public juce::AudioPlayHead
 {
@@ -138,6 +139,179 @@ static bool readFirstTempo (const juce::File& file, double& secondsPerQuarter)
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
+
+    // The new selector preserves old normalization and restores old projects.
+    {
+        ChordTextAudioProcessor p;
+        auto* legacy = dynamic_cast<juce::AudioParameterChoice*> (p.apvts.getParameter ("mode"));
+        auto* scale = dynamic_cast<juce::AudioParameterChoice*> (p.apvts.getParameter ("scaleMode"));
+        CHECK (legacy != nullptr && legacy->choices.size() == 2);
+        CHECK (scale != nullptr && scale->choices.size() == 9);
+        CHECK (legacy->convertFrom0to1 (1.0f) == 1.0f);
+        CHECK (p.getParameters().getLast() == scale);
+        if (scale != nullptr)
+        {
+            p.setProgressionText ("1, 2(7)");
+            for (int index = 0; index < 9; ++index)
+            {
+                scale->setValueNotifyingHost (static_cast<float> (index) / 8.0f);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                CHECK (choiceIndex (p, "scaleMode") == index);
+                CHECK (p.getLearningRows().size() == 2);
+                CHECK (p.getLearningRows()[1].numericDegree == 2);
+            }
+            legacy->setValueNotifyingHost (1.0f);
+            scale->setValueNotifyingHost (2.0f / 8.0f);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
+            CHECK (choiceIndex (p, "scaleMode") == 2);
+            CHECK (p.getScaleSummary() == juce::String::fromUTF8 ("C Dorian \xc2\xb7 C D Eb F G A Bb"));
+
+            legacy->setValueNotifyingHost (0.0f);
+            legacy->setValueNotifyingHost (1.0f);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
+            CHECK (choiceIndex (p, "scaleMode") == 1);
+
+            std::thread automation ([&] { scale->setValueNotifyingHost (7.0f / 8.0f); });
+            automation.join();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
+            CHECK (choiceIndex (p, "scaleMode") == 7);
+            CHECK (p.getLearningRows()[0].chord == "Cm");
+            scale->setValueNotifyingHost (0.0f);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
+            CHECK (choiceIndex (p, "mode") == 0);
+
+            // Construct legacy state by removing the new parameter from a snapshot.
+            auto oldState = p.apvts.copyState();
+            oldState.removeChild (oldState.getChildWithProperty ("id", "scaleMode"), nullptr);
+            oldState.getChildWithProperty ("id", "mode").setProperty ("value", 1.0f, nullptr);
+            oldState.setProperty ("progressionText", "1", nullptr);
+            juce::MemoryBlock bytes;
+            juce::AudioProcessor::copyXmlToBinary (*oldState.createXml(), bytes);
+            scale->setValueNotifyingHost (2.0f / 8.0f); // pending Dorian must not survive restore
+            p.setStateInformation (bytes.getData(), static_cast<int> (bytes.getSize()));
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
+            CHECK (choiceIndex (p, "scaleMode") == 1);
+            CHECK (p.getLearningRows()[0].chord == "Cm");
+
+            // Saving before deferred synchronization must preserve the new selection.
+            scale->setValueNotifyingHost (7.0f / 8.0f);
+            p.getStateInformation (bytes);
+            ChordTextAudioProcessor restored;
+            restored.setStateInformation (bytes.getData(), static_cast<int> (bytes.getSize()));
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
+            CHECK (choiceIndex (restored, "scaleMode") == 7);
+            CHECK (restored.getScaleSummary().contains ("Harmonic Minor"));
+        }
+    }
+
+    // Numeric cards and scale summary share the selected scale and retain stale analysis.
+    {
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("1(7), 6(7), 2(7), 5(7)");
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        auto* selector = dynamic_cast<juce::ComboBox*> (editor->findChildWithID ("modeBox"));
+        auto* summary = dynamic_cast<juce::Label*> (editor->findChildWithID ("scaleSummary"));
+        CHECK (selector != nullptr);
+        CHECK (summary != nullptr);
+        const auto snapshotDir = juce::SystemStats::getEnvironmentVariable ("CHORDSCRIPT_UI_SNAPSHOT_DIR", {});
+        const auto snapshot = [&] (const char* name)
+        {
+            if (snapshotDir.isEmpty()) return;
+            juce::File directory (snapshotDir);
+            directory.createDirectory();
+            juce::FileOutputStream stream (directory.getChildFile (name));
+            if (stream.openedOk())
+            {
+                stream.setPosition (0);
+                stream.truncate();
+                juce::PNGImageFormat().writeImageToStream (
+                    editor->createComponentSnapshot (editor->getLocalBounds()), stream);
+            }
+        };
+        if (selector && summary)
+        {
+            CHECK (selector->getNumItems() == 9);
+            CHECK (summary->getText() == p.getScaleSummary());
+            CHECK (summary->getY() >= selector->getBottom());
+            CHECK (summary->getRight() <= editor->getWidth() - 28);
+            CHECK (p.getLearningRows()[2].numericDegree == 2);
+            CHECK (p.getLearningRows()[2].degree == "ii7");
+            auto* footer = dynamic_cast<juce::Label*> (editor->findChildWithID ("footerStatus"));
+            CHECK (footer != nullptr && footer->getText() == juce::String::fromUTF8 ("4 chords \xc2\xb7 MIDI ready"));
+            snapshot ("numeric-major.png");
+            selector->setSelectedItemIndex (2, juce::sendNotificationSync);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+            CHECK (choiceIndex (p, "scaleMode") == 2);
+            CHECK (p.getLearningRows()[0].chord == "Cm7");
+            CHECK (summary->getText().contains ("C Dorian"));
+            snapshot ("numeric-dorian.png");
+
+            p.setProgressionText ("1645");
+            selector->setSelectedItemIndex (7, juce::sendNotificationSync);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+            CHECK (summary->getText().contains ("Harmonic Minor"));
+            CHECK (p.getLearningRows()[0].chord == "Cm7");
+            auto* status = dynamic_cast<juce::Label*> (editor->findChildWithID ("sequenceStatus"));
+            auto* errors = editor->findChildWithID ("diagnosticsDisplay");
+            CHECK (status != nullptr && status->getText() == "Last valid preview");
+            CHECK (errors != nullptr && ! errors->getBounds().intersects (summary->getBounds()));
+            auto* staleSequence = editor->findChildWithID ("chordSequence");
+            const auto staleImage = staleSequence->createComponentSnapshot (staleSequence->getLocalBounds());
+            CHECK (staleImage.getPixelAt (10, 80).getRed() < 0x1d);
+            snapshot ("numeric-invalid.png");
+            editor.reset (p.createEditor());
+            summary = dynamic_cast<juce::Label*> (editor->findChildWithID ("scaleSummary"));
+            CHECK (summary != nullptr && summary->getText() == p.getScaleSummary());
+        }
+    }
+
+    // Numeric and explicit chords must produce identical export and drag MIDI.
+    {
+        struct MidiExample { int mode; int tonic; const char* numeric; const char* explicitChords; };
+        const MidiExample examples[] {
+            {0, 0, "1(7):2, 6(7):1.5, 2(7):0.5, 5(7):4", "Cmaj7:2, Am7:1.5, Dm7:0.5, G7:4"},
+            {7, 13, "1(7), 3(7), 5dom7", "AmMaj7, Cmaj7#5, E7"},
+            {2, 0, "1(7), III, 5(7):8", "Cm7, Eb, Gm7:8"}
+        };
+        const auto directory = juce::File::getCurrentWorkingDirectory().getChildFile ("build/Tests/numeric-output");
+        CHECK (directory.createDirectory().wasOk());
+        for (const auto& example : examples)
+            for (const auto rootPosition : {false, true})
+            {
+                ChordTextAudioProcessor numeric, explicitInput;
+                for (auto* processor : {&numeric, &explicitInput})
+                {
+                    processor->apvts.getParameter ("scaleMode")->setValueNotifyingHost (static_cast<float> (example.mode) / 8.0f);
+                    processor->apvts.getParameter ("key")->setValueNotifyingHost (static_cast<float> (example.tonic) / 16.0f);
+                    processor->apvts.getParameter ("voicing")->setValueNotifyingHost (rootPosition ? 1.0f : 0.0f);
+                }
+                numeric.setProgressionText (example.numeric);
+                explicitInput.setProgressionText (example.explicitChords);
+                CHECK (numeric.getDiagnostics().empty());
+                CHECK (explicitInput.getDiagnostics().empty());
+                juce::String error;
+                const auto numericFile = directory.getNonexistentChildFile ("numeric", ".mid", false);
+                CHECK (numeric.exportMidiFile (numericFile, error));
+                const auto explicitFile = directory.getNonexistentChildFile ("explicit", ".mid", false);
+                CHECK (explicitInput.exportMidiFile (explicitFile, error));
+                juce::MemoryBlock numericBytes, explicitBytes;
+                CHECK (numericFile.loadFileAsData (numericBytes));
+                CHECK (explicitFile.loadFileAsData (explicitBytes));
+                CHECK (numericBytes == explicitBytes);
+                const auto numericDrag = numeric.createDragClipFile (error);
+                const auto explicitDrag = explicitInput.createDragClipFile (error);
+                numericBytes.reset();
+                explicitBytes.reset();
+                CHECK (numericDrag.loadFileAsData (numericBytes));
+                CHECK (explicitDrag.loadFileAsData (explicitBytes));
+                CHECK (numericBytes == explicitBytes);
+                juce::MemoryInputStream stream (numericBytes, false);
+                juce::MidiFile readBack;
+                CHECK (readBack.readFrom (stream));
+                CHECK (readBack.getNumTracks() == 1);
+                CHECK (readBack.getTrack (0)->getNumEvents() > 0);
+            }
+    }
 
     // Walking-skeleton smoke test, updated for the parsed default plan.
     {

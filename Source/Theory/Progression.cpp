@@ -2,6 +2,7 @@
 
 #include "Theory/ChordSymbolParser.h"
 #include "Theory/RomanNumeralParser.h"
+#include "Theory/NumericDegreeParser.h"
 
 #include <cctype>
 #include <charconv>
@@ -130,8 +131,20 @@ ProgressionParseResult parseProgression (std::string_view text, const Key& key)
 
         std::optional<ChordSpec> spec;
         std::optional<Diagnostic> error;
+        int numericDegree = 0;
 
-        if (isRomanToken (chordText))
+        const auto digit = [] (char c) { return c >= '0' && c <= '9'; };
+        const auto numeric = digit (chordText.front())
+            || ((chordText.front() == 'b' || chordText.front() == '#')
+                && chordText.size() > 1 && digit (chordText[1]));
+        if (numeric)
+        {
+            auto parsed = parseNumericDegree (chordText, key, start);
+            spec = std::move (parsed.chord);
+            error = std::move (parsed.error);
+            numericDegree = parsed.degree;
+        }
+        else if (isRomanToken (chordText))
         {
             auto parsed = parseRomanNumeral (chordText, key, start);
             spec = std::move (parsed.chord);
@@ -157,7 +170,7 @@ ProgressionParseResult parseProgression (std::string_view text, const Key& key)
         }
 
         progression.steps.push_back (ProgressionStep { Chord (std::move (*spec)), duration,
-                                                       std::string (chordText), start });
+                                                       std::string (chordText), start, numericDegree });
     }
 
     if (result.diagnostics.empty())

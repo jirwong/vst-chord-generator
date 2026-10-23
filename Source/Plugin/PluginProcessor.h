@@ -16,6 +16,7 @@ struct LearningRow
     juce::String degree;
     juce::String notes;
     double durationBeats = 4.0;
+    int numericDegree = 0;
 };
 
 class ChordTextAudioProcessor final : public juce::AudioProcessor,
@@ -44,6 +45,7 @@ public:
     std::vector<chordtext::Diagnostic> getDiagnostics() const;
     std::vector<LearningRow> getLearningRows() const;
     int getCurrentStep() const;
+    juce::String getScaleSummary() const;
     void rebuildPlan(); // message thread only
 
     // Message thread only. Uses the same plan as live playback.
@@ -115,6 +117,9 @@ private:
     std::atomic<bool> transportAvailable { false };
     std::atomic<bool> playheadAvailable { false };
     std::atomic<bool> loopEnabled { true };
+    // Latest external mode event. Both legacy and new automation write here;
+    // only the message thread synchronizes APVTS and rebuilds the plan.
+    std::atomic<int> effectiveScaleIndex { 0 };
 
     // Written only by the audio thread, read by the message thread for export.
     // AudioPlayHead::getPosition() is processBlock-only, so export must never

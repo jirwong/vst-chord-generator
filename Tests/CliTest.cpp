@@ -38,7 +38,38 @@ int main()
     CHECK (parseTonic ("db")->name() == "Db");
     CHECK (! parseTonic ("H").has_value());
     CHECK (parseMode ("MINOR") == std::optional<Mode> { Mode::minor });
-    CHECK (! parseMode ("dorian").has_value());
+    CHECK (! parseMode ("unknown-scale").has_value());
+    CHECK (parseMode ("DORIAN") == std::optional<Mode> { Mode::dorian });
+    CHECK (parseMode ("Ionian") == std::optional<Mode> { Mode::major });
+    CHECK (parseMode ("Aeolian") == std::optional<Mode> { Mode::minor });
+    for (const auto scaleMode : allModes())
+    {
+        const std::string name (chordtext::modeName (scaleMode));
+        const auto options = parseOptions ({"--mode", name, "1, 2(7)"});
+        CHECK (options.status == CliParseStatus::ok);
+        CHECK (options.options.settings.mode == scaleMode);
+        CHECK (options.options.settings.modeName() == name);
+        CliSession modalSession;
+        const auto feedback = modalSession.handleLine (":mode " + name);
+        CHECK (feedback.feedback.find ("Error") == std::string::npos);
+        CHECK (modalSession.settings().mode == scaleMode);
+    }
+    CliSettings modalSettings;
+    modalSettings.mode = Mode::dorian;
+    const auto numericReport = buildReport ("3(7)", modalSettings);
+    CHECK (numericReport.valid);
+    CHECK (numericReport.chords[0].source == "3(7)");
+    CHECK (numericReport.chords[0].symbol == "Ebmaj7");
+    CHECK (numericReport.chords[0].degree == "IIImaj7");
+    CHECK (formatJson (numericReport).find ("\"mode\": \"dorian\"") != std::string::npos);
+    modalSettings.tonic = {'A', 0};
+    modalSettings.mode = Mode::harmonicMinor;
+    const auto harmonicReport = buildReport ("3(7)", modalSettings);
+    CHECK (harmonicReport.valid);
+    CHECK (harmonicReport.chords[0].symbol == "Cmaj7#5");
+    CHECK ((harmonicReport.chords[0].spelledTones == std::vector<std::string> {"C", "E", "G#", "B"}));
+    CHECK (formatJson (harmonicReport).find ("\"mode\": \"harmonic-minor\"") != std::string::npos);
+    CHECK (! buildReport ("1645", modalSettings).valid);
     CHECK (parseVoicing ("ROOT-POSITION")
            == std::optional<VoicingMode> { VoicingMode::rootPosition });
     CHECK (parseVoicing ("root")

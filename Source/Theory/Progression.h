@@ -18,6 +18,7 @@ struct ProgressionStep
     double durationBeats = 4.0;
     std::string sourceText;
     std::size_t offset = 0;
+    int numericDegree = 0;
 };
 
 struct Progression

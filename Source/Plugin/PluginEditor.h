@@ -69,6 +69,7 @@ private:
     juce::Label voicingLabel;
     juce::Label rangeLabel;
     juce::Label velocityLabel;
+    juce::Label scaleSummaryLabel;
     juce::ComboBox keyBox;
     juce::ComboBox modeBox;
     juce::ComboBox voicingBox;
