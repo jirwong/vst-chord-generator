@@ -46,6 +46,12 @@ public:
     void setNoPosition() { hasPosition = false; }
     void setMissingPpq() { hasPpq = false; }
     void setMissingBpm() { hasBpm = false; }
+    void setTimeSignature (int numeratorIn, int denominatorIn)
+    {
+        hasTimeSignature = true;
+        numerator = numeratorIn;
+        denominator = denominatorIn;
+    }
 
     juce::Optional<PositionInfo> getPosition() const override
     {
@@ -57,6 +63,8 @@ public:
             info.setPpqPosition (ppq);
         if (hasBpm)
             info.setBpm (bpm);
+        if (hasTimeSignature)
+            info.setTimeSignature (TimeSignature {numerator, denominator});
         info.setIsPlaying (playing);
         return info;
     }
@@ -68,6 +76,9 @@ private:
     bool hasPosition = true;
     bool hasPpq = true;
     bool hasBpm = true;
+    bool hasTimeSignature = false;
+    int numerator = 4;
+    int denominator = 4;
 };
 
 juce::MidiBuffer renderBlock (ChordTextAudioProcessor& processor, int samples = 512)
@@ -1359,11 +1370,17 @@ void checkPreviewScaledAndScrolledCards()
         findEditorChild (editor, "chordSequence"));
     auto* hint = dynamic_cast<juce::Label*> (findEditorChild (editor, "previewHint"));
     auto* status = dynamic_cast<juce::Label*> (findEditorChild (editor, "sequenceStatus"));
+    auto* length = dynamic_cast<juce::ComboBox*> (
+        findEditorChild (editor, "defaultLengthBox"));
+    auto* bass = dynamic_cast<juce::ComboBox*> (findEditorChild (editor, "bassBox"));
     CHECK (selector != nullptr);
     CHECK (sequence != nullptr);
     CHECK (hint != nullptr);
     CHECK (status != nullptr);
-    if (selector == nullptr || sequence == nullptr || hint == nullptr || status == nullptr)
+    CHECK (length != nullptr);
+    CHECK (bass != nullptr);
+    if (selector == nullptr || sequence == nullptr || hint == nullptr || status == nullptr
+        || length == nullptr || bass == nullptr)
         return;
 
     CHECK (hint->getText().contains ("Left press to preview"));
@@ -1376,9 +1393,14 @@ void checkPreviewScaledAndScrolledCards()
 
         const auto hintArea = editor.getLocalArea (hint, hint->getLocalBounds());
         const auto statusArea = editor.getLocalArea (status, status->getLocalBounds());
+        const auto lengthArea = editor.getLocalArea (length, length->getLocalBounds());
+        const auto bassArea = editor.getLocalArea (bass, bass->getLocalBounds());
         CHECK (editor.getLocalBounds().contains (hintArea));
         CHECK (editor.getLocalBounds().contains (statusArea));
+        CHECK (editor.getLocalBounds().contains (lengthArea));
+        CHECK (editor.getLocalBounds().contains (bassArea));
         CHECK (! hintArea.intersects (statusArea));
+        CHECK (! lengthArea.intersects (bassArea));
 
         sequence->setViewPosition (0, 90);
         const auto cardIndex = 4;
@@ -1555,6 +1577,98 @@ void checkCustomCardDetailsTooltip()
     content->mouseExit (makeMouseEvent (
         *content, juce::Point<float> (-2.0f, -2.0f), {}));
     CHECK (tooltip->getTooltip().isEmpty());
+}
+
+void checkLengthControlsAndCardTiming()
+{
+    ChordTextAudioProcessor processor;
+    configureRootPosition (processor, "C, Dm:1bar");
+    processor.setPlayHead (nullptr);
+    processor.prepareToPlay (48000.0, 512);
+
+    ChordTextAudioProcessorEditor editor (processor, UiSettings { juce::File() });
+    editor.setVisible (true);
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+
+    auto* lengthLabel = dynamic_cast<juce::Label*> (
+        findEditorChild (editor, "defaultLengthLabel"));
+    auto* lengthBox = dynamic_cast<juce::ComboBox*> (
+        findEditorChild (editor, "defaultLengthBox"));
+    auto* bassBox = dynamic_cast<juce::ComboBox*> (findEditorChild (editor, "bassBox"));
+    auto* sequence = dynamic_cast<ChordSequenceComponent*> (
+        findEditorChild (editor, "chordSequence"));
+    auto* meta = dynamic_cast<juce::Label*> (findEditorChild (editor, "sequenceMeta"));
+    CHECK (lengthLabel != nullptr);
+    CHECK (lengthBox != nullptr);
+    CHECK (bassBox != nullptr);
+    CHECK (sequence != nullptr);
+    CHECK (meta != nullptr);
+    if (lengthLabel == nullptr || lengthBox == nullptr || bassBox == nullptr
+        || sequence == nullptr || meta == nullptr)
+    {
+        return;
+    }
+
+    CHECK (lengthLabel->getText() == "DEFAULT LENGTH");
+    CHECK (lengthBox->getNumItems() == 19);
+    CHECK (lengthBox->getSelectedId() == 16);
+    CHECK (lengthBox->getText() == "4 beats");
+    const auto lengthArea = editor.getLocalArea (lengthBox, lengthBox->getLocalBounds());
+    const auto bassArea = editor.getLocalArea (bassBox, bassBox->getLocalBounds());
+    CHECK (editor.getLocalBounds().contains (lengthArea));
+    CHECK (editor.getLocalBounds().contains (bassArea));
+    CHECK (! lengthArea.intersects (bassArea));
+
+    lengthBox->setSelectedId (8, juce::sendNotificationSync);
+    for (int attempt = 0; attempt < 20
+         && (processor.getLearningRows().empty()
+             || processor.getLearningRows()[0].lengthExpression != "1/8D");
+         ++attempt)
+    {
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+    }
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (40);
+
+    const auto rows = processor.getLearningRows();
+    CHECK (rows.size() == 2);
+    if (rows.size() != 2)
+        return;
+
+    CHECK (rows[0].lengthExpression == "1/8D");
+    CHECK (rows[0].usesDefaultLength);
+    CHECK (rows[1].lengthExpression == "1bar");
+    CHECK (! rows[1].usesDefaultLength);
+    CHECK (meta->getText().contains ("4/4 fallback"));
+
+    auto* content = sequence->getViewedComponent();
+    CHECK (content != nullptr);
+    if (content == nullptr)
+        return;
+
+    auto* tooltip = dynamic_cast<juce::SettableTooltipClient*> (content);
+    CHECK (tooltip != nullptr);
+    if (tooltip == nullptr)
+        return;
+
+    content->mouseMove (makeMouseEvent (
+        *content, sequence->cardBounds (0).getCentre().toFloat(), {}));
+    CHECK (tooltip->getTooltip().contains ("1/8D"));
+    CHECK (tooltip->getTooltip().contains ("DEFAULT"));
+    content->mouseMove (makeMouseEvent (
+        *content, sequence->cardBounds (1).getCentre().toFloat(), {}));
+    CHECK (tooltip->getTooltip().contains ("1bar"));
+    CHECK (! tooltip->getTooltip().contains ("DEFAULT"));
+
+    PreviewPlayHead head;
+    head.setPosition (0.0, true, 120.0);
+    head.setTimeSignature (6, 8);
+    processor.setPlayHead (&head);
+    renderBlock (processor);
+    processor.rebuildPlan();
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (40);
+    CHECK (meta->getText().contains ("6/8 host"));
+
+    captureEditor (editor, "length-controls.png");
 }
 
 void checkPreviewDisplayedRevision()
@@ -1881,6 +1995,7 @@ void runChordPreviewChecks()
     checkPreviewScaledAndScrolledCards();
     checkPreviewBadgePadding();
     checkCustomCardDetailsTooltip();
+    checkLengthControlsAndCardTiming();
     checkPreviewDisplayedRevision();
     checkPreviewEditorCleanup();
 }

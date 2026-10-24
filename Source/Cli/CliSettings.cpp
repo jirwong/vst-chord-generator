@@ -61,7 +61,14 @@ VoicingSettings CliSettings::voicingSettings() const
 
 MidiFileSettings CliSettings::midiFileSettings() const
 {
-    return MidiFileSettings { bpm, true, "Chord Text", 960 };
+    MidiFileSettings settings { bpm, true, "Chord Text", 960 };
+    settings.signature = timeSignature;
+    return settings;
+}
+
+TimingSettings CliSettings::timingSettings() const
+{
+    return {defaultLength, timeSignature};
 }
 
 std::string CliSettings::keyName() const
@@ -94,7 +101,10 @@ std::string formatSettingsLine (const CliSettings& settings)
          + " · Voicing: " + settings.voicingName()
          + " · Range: " + settings.rangeName()
          + " · Velocity: " + std::to_string (settings.velocity)
-         + " · Bass: " + bass;
+         + " · Bass: " + bass
+         + " · Default length: " + formatLength (settings.defaultLength)
+         + " · Time signature: " + std::to_string (settings.timeSignature.numerator)
+             + "/" + std::to_string (settings.timeSignature.denominator);
 }
 
 std::optional<PitchClass> parseTonic (std::string_view text)

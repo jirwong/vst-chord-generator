@@ -139,6 +139,26 @@ CliParseResult parseOptions (const std::vector<std::string>& args)
                     return invalid ("--bpm", value);
                 options.settings.bpm = *bpm;
             }
+            else if (name == "--default-length")
+            {
+                std::string value;
+                if (! requireValue (value))
+                    return CliParseResult { CliParseStatus::usageError, {}, "Missing value for --default-length" };
+                const auto length = parseLength (value);
+                if (! length.value.has_value())
+                    return invalid ("--default-length", value);
+                options.settings.defaultLength = *length.value;
+            }
+            else if (name == "--time-signature")
+            {
+                std::string value;
+                if (! requireValue (value))
+                    return CliParseResult { CliParseStatus::usageError, {}, "Missing value for --time-signature" };
+                const auto signature = parseTimeSignature (value);
+                if (! signature.has_value())
+                    return invalid ("--time-signature", value);
+                options.settings.timeSignature = *signature;
+            }
             else if (name == "--bass")
             {
                 std::string value;
@@ -193,6 +213,8 @@ std::string helpText()
         "                       Default: C3-C6.\n"
         "  --velocity <n>       Note velocity 1..127. Default: 100.\n"
         "  --bpm <n>            Tempo 4.0..999.0. Default: 120.\n"
+        "  --default-length <x> Default: 4beats. Examples: 1/8D, 2beats, 1bar.\n"
+        "  --time-signature <n/d>  Meter for bars. Default: 4/4.\n"
         "  --bass <off|1|2|3>   Add the root 1, 2, or 3 octaves down. Default: off.\n"
         "  --json               Emit JSON output instead of a report.\n"
         "  --out <path>         Output MIDI file path.\n"
@@ -201,7 +223,7 @@ std::string helpText()
         "A single positional argument is the progression string. Use `--` to\n"
         "end option parsing.\n"
         "Chords: 1, 6, 4, 5 (scale triads); 2(7) (scale seventh).\n"
-        "Add :N for duration in beats, for example 2(7):8.\n"
+        "Add :length for a step, for example 2(7):1/8D or 5:1bar.\n"
         "\n"
         "Exit codes:\n"
         "  0  success (including an empty progression)\n"

@@ -5,11 +5,15 @@
 #include "Cli/CliRun.h"
 #include "Cli/CliSession.h"
 #include "Cli/CliSettings.h"
+#include "Theory/Length.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <vector>
 
 using namespace chordtext;
 using namespace chordtext::cli;
@@ -77,6 +81,61 @@ std::vector<int> readMidiNoteOnPitches (const std::filesystem::path& path)
 
     return result;
 }
+
+std::vector<std::uint8_t> readMidiBytes (const std::filesystem::path& path)
+{
+    std::ifstream input (path, std::ios::binary);
+    return {std::istreambuf_iterator<char> (input), std::istreambuf_iterator<char>()};
+}
+
+bool containsBytes (const std::vector<std::uint8_t>& bytes,
+                    std::initializer_list<std::uint8_t> pattern)
+{
+    return std::search (bytes.begin(), bytes.end(), pattern.begin(), pattern.end())
+        != bytes.end();
+}
+
+std::vector<int> readMidiNoteOffTicks (const std::filesystem::path& path)
+{
+    const auto bytes = readMidiBytes (path);
+    std::vector<int> result;
+    if (bytes.size() < 22)
+        return result;
+
+    auto offset = std::size_t (8 + readMidiU32 (bytes, 4) + 8);
+    const auto trackEnd = offset - 8 + std::size_t (8 + readMidiU32 (bytes, offset - 4));
+    auto tick = 0;
+    auto runningStatus = 0;
+    while (offset < trackEnd)
+    {
+        tick += readMidiVlq (bytes, offset);
+        auto status = bytes[offset++];
+        if (status < 0x80)
+        {
+            --offset;
+            status = static_cast<std::uint8_t> (runningStatus);
+        }
+        else
+        {
+            runningStatus = status;
+        }
+
+        if (status == 0xFF)
+        {
+            ++offset;
+            offset += static_cast<std::size_t> (readMidiVlq (bytes, offset));
+            continue;
+        }
+
+        const auto kind = status & 0xF0;
+        ++offset;
+        const auto velocity = (kind == 0xC0 || kind == 0xD0) ? 0 : int (bytes[offset++]);
+        if (kind == 0x80 || (kind == 0x90 && velocity == 0))
+            result.push_back (tick);
+    }
+
+    return result;
+}
 }
 
 int main()
@@ -90,18 +149,22 @@ int main()
     CHECK (defaults.bpm == 120.0);
     CHECK (! defaults.json);
     CHECK (defaults.bassOctaves == 0);
+    CHECK (formatLength (defaults.defaultLength) == "4beats");
+    CHECK ((defaults.timeSignature == TimeSignature {4, 4}));
     CHECK (defaults.keyName() == "C");
     CHECK (defaults.modeName() == "major");
     CHECK (defaults.voicingName() == "voice-led");
     CHECK (defaults.rangeName() == "C3-C6");
     CHECK (formatSettingsLine (defaults)
-           == "Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off");
+           == "Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off"
+              " · Default length: 4beats · Time signature: 4/4");
 
     const auto midiSettings = defaults.midiFileSettings();
     CHECK (midiSettings.bpm == 120.0);
     CHECK (midiSettings.includeTempoAndTimeSignature);
     CHECK (midiSettings.trackName == "Chord Text");
     CHECK (midiSettings.ticksPerQuarterNote == 960);
+    CHECK ((midiSettings.signature == TimeSignature {4, 4}));
 
     CHECK (parseTonic ("db")->name() == "Db");
     CHECK (! parseTonic ("H").has_value());
@@ -191,6 +254,14 @@ int main()
     CHECK (parsed.status == CliParseStatus::ok);
     CHECK (parsed.options.settings.bassOctaves == 0);
 
+    parsed = parseOptions ({ "--default-length", "1/8D", "--time-signature=6/8", "C" });
+    CHECK (parsed.status == CliParseStatus::ok);
+    CHECK (formatLength (parsed.options.settings.defaultLength) == "1/8D");
+    CHECK ((parsed.options.settings.timeSignature == TimeSignature {6, 8}));
+    parsed = parseOptions ({ "--default-length=5/16", "C" });
+    CHECK (parsed.status == CliParseStatus::ok);
+    CHECK (formatLength (parsed.options.settings.defaultLength) == "5/16");
+
     parsed = parseOptions ({ "--key", "C", "--key", "D" });
     CHECK (parsed.options.settings.keyName() == "D");
 
@@ -210,7 +281,11 @@ int main()
         { "--bpm", "3.9" },
         { "--bass", "0" },
         { "--bass", "4" },
-        { "--bass" }
+        { "--bass" },
+        { "--default-length", "1/3" },
+        { "--default-length" },
+        { "--time-signature", "4/3" },
+        { "--time-signature" }
     };
 
     for (const auto& args : usageErrors)
@@ -237,6 +312,8 @@ int main()
     CHECK (helpText().find ("--key") != std::string::npos);
     CHECK (helpText().find ("--out") != std::string::npos);
     CHECK (helpText().find ("--bass") != std::string::npos);
+    CHECK (helpText().find ("--default-length") != std::string::npos);
+    CHECK (helpText().find ("--time-signature") != std::string::npos);
     CHECK (helpText().find ("chordtext-cli") != std::string::npos);
     CHECK (helpText().find ("  1  progression parse errors") != std::string::npos);
     CHECK (helpText().find ("  2  usage error") != std::string::npos);
@@ -269,13 +346,45 @@ int main()
     CHECK (report.plan.lengthBeats == 6.0);
     CHECK (report.plan.events.size() == 16);
 
+    CliSettings lengthSettings = tableSettings;
+    const auto dottedEighth = parseLength ("1/8D");
+    CHECK (dottedEighth.value.has_value());
+    if (dottedEighth.value)
+        lengthSettings.defaultLength = *dottedEighth.value;
+    lengthSettings.timeSignature = {6, 8};
+    const auto lengthReport = buildReport ("C, Dm:2, G:1bar, [1]:1/8T", lengthSettings);
+    CHECK (lengthReport.valid);
+    CHECK (lengthReport.chords.size() == 4);
+    if (lengthReport.chords.size() == 4)
+    {
+        CHECK (lengthReport.chords[0].durationBeats == 0.75);
+        CHECK (lengthReport.chords[1].durationBeats == 2.0);
+        CHECK (lengthReport.chords[2].durationBeats == 3.0);
+        CHECK (lengthReport.chords[3].durationBeats == 1.0 / 3.0);
+        CHECK (lengthReport.chords[0].startBeat == 0.0);
+        CHECK (lengthReport.chords[1].startBeat == 0.75);
+        CHECK (lengthReport.chords[2].startBeat == 2.75);
+        CHECK (lengthReport.chords[3].startBeat == 5.75);
+        CHECK (lengthReport.chords[0].lengthExpression == "1/8D");
+        CHECK (lengthReport.chords[0].usesDefaultLength);
+        CHECK (lengthReport.chords[2].lengthExpression == "1bar");
+        CHECK (! lengthReport.chords[2].usesDefaultLength);
+    }
+    const auto lengthJson = formatJson (lengthReport);
+    CHECK (lengthJson.find ("\"defaultLength\": \"1/8D\"") != std::string::npos);
+    CHECK (lengthJson.find ("\"timeSignature\": {\"numerator\": 6, \"denominator\": 8}")
+           != std::string::npos);
+    CHECK (lengthJson.find ("\"lengthExpression\": \"1bar\"") != std::string::npos);
+    CHECK (lengthJson.find ("\"usesDefaultLength\": true") != std::string::npos);
+
     const std::string expectedHuman =
         "Progression: Cmaj7:2, Am7\n"
-        "Key: C major · Voicing: root-position · Range: C2-C5 · Velocity: 100 · Bass: Off\n"
+        "Key: C major · Voicing: root-position · Range: C2-C5 · Velocity: 100 · Bass: Off"
+        " · Default length: 4beats · Time signature: 4/4\n"
         "\n"
-        "Chord  Degree  Notes    Beats  MIDI\n"
-        "Cmaj7  Imaj7   C E G B  2      36 40 43 47\n"
-        "Am7    vi7     A C E G  4      45 48 52 55\n";
+        "Chord  Degree  Notes    Length  Beats  MIDI\n"
+        "Cmaj7  Imaj7   C E G B  2beats  2      36 40 43 47\n"
+        "Am7    vi7     A C E G  4beats  4      45 48 52 55\n";
     CHECK (formatHuman (report) == expectedHuman);
 
     const auto invalid = buildReport ("C, H, C99", CliSettings {});
@@ -283,7 +392,8 @@ int main()
     CHECK (invalid.diagnostics.size() == 2);
     const std::string expectedInvalid =
         "Progression: C, H, C99\n"
-        "Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off\n"
+        "Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off"
+        " · Default length: 4beats · Time signature: 4/4\n"
         "\n"
         "2 errors:\n"
         "Error at character 3: unknown chord root (H)\n"
@@ -475,6 +585,24 @@ int main()
     CHECK (std::filesystem::exists (temp / "last.mid"));
     std::filesystem::remove (temp / "last.mid");
 
+    CliSession lengthExporter;
+    lengthExporter.handleLine ("C");
+    output = lengthExporter.handleLine (":default-length 1/8D");
+    CHECK (output.feedback.find ("1/8D") != std::string::npos);
+    output = lengthExporter.handleLine (":time-signature 6/8");
+    CHECK (output.feedback.find ("6/8") != std::string::npos);
+    output = lengthExporter.handleLine ("H");
+    CHECK (output.report.find ("Error at character") != std::string::npos);
+    output = lengthExporter.handleLine (":export " + (temp / "lengths").string());
+    CHECK (output.feedback.find ("Wrote") != std::string::npos);
+    const auto lengthFile = temp / "lengths.mid";
+    const auto lengthBytes = readMidiBytes (lengthFile);
+    CHECK (containsBytes (lengthBytes, {0xFF, 0x58, 0x04, 0x06, 0x03, 0x18, 0x08}));
+    CHECK ((readMidiNoteOffTicks (lengthFile) == std::vector<int> {720, 720, 720}));
+    output = lengthExporter.handleLine (":time-signature 4/3");
+    CHECK (output.feedback.find ("Error") != std::string::npos);
+    CHECK ((lengthExporter.settings().timeSignature == TimeSignature {6, 8}));
+
     exporter.handleLine ("[C-1,1,3,5]");
     exporter.handleLine (":bass 1");
     output = exporter.handleLine (":export " + (temp / "bounds").string());
@@ -602,6 +730,19 @@ int main()
     run = runOneShot ("C99", oneShot);
     CHECK (run.exitCode == 1);
     CHECK (! std::filesystem::exists (runTemp / "invalid.mid"));
+
+    const auto preservedFile = runTemp / "preserved.mid";
+    {
+        std::ofstream preservedOutput (preservedFile, std::ios::binary);
+        preservedOutput << "keep";
+    }
+    oneShot.outputPath = (runTemp / "preserved").string();
+    run = runOneShot ("C:0.0001", oneShot);
+    CHECK (run.exitCode == 2);
+    {
+        std::ifstream preservedInput (preservedFile, std::ios::binary);
+        CHECK (std::string (std::istreambuf_iterator<char> (preservedInput), {}) == "keep");
+    }
 
     const auto runBlocker = runTemp / "blocker";
     {

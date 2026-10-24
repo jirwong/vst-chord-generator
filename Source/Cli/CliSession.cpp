@@ -9,7 +9,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
 
 namespace chordtext::cli
@@ -72,12 +71,14 @@ std::string helpMessage (const CliSettings& settings)
         "  :range <C2-C5|C3-C6|C4-C7>      Set the pitch range.\n"
         "  :velocity <1-127>               Set the note velocity.\n"
         "  :bpm <4-999>                    Set the tempo.\n"
+        "  :default-length <length>        Set the inherited chord length.\n"
+        "  :time-signature <n/d>           Set the meter used by bar lengths.\n"
         "  :bass <off|1|2|3>               Add the root 1, 2, or 3 octaves down.\n"
         "  :json <on|off>                  Toggle JSON report output.\n"
         "  :export <path>                  Write the last valid progression to MIDI.\n"
         "  :help                           Show this help.\n"
         "  :quit, :q                       Exit the session.\n"
-        "Chords: 1, 6, 4, 5. Use 2(7) for a scale seventh; :N sets beats.\n"
+        "Chords: 1, 6, 4, 5. Use 2(7) for a scale seventh; :length sets a step.\n"
         + formatSettingsLine (settings) + "\n";
 }
 }
@@ -229,6 +230,38 @@ CliSessionOutput CliSession::handleLine (std::string_view line)
             output.feedback = invalidValueMessage (command);
         }
     }
+    else if (command == "default-length")
+    {
+        if (rest.empty())
+        {
+            output.feedback = invalidValueMessage (command);
+        }
+        else if (const auto value = parseLength (rest); value.value.has_value())
+        {
+            settings_.defaultLength = *value.value;
+            output.feedback = formatSettingsLine (settings_) + "\n";
+        }
+        else
+        {
+            output.feedback = invalidValueMessage (command);
+        }
+    }
+    else if (command == "time-signature")
+    {
+        if (rest.empty())
+        {
+            output.feedback = invalidValueMessage (command);
+        }
+        else if (const auto value = parseTimeSignature (rest))
+        {
+            settings_.timeSignature = *value;
+            output.feedback = formatSettingsLine (settings_) + "\n";
+        }
+        else
+        {
+            output.feedback = invalidValueMessage (command);
+        }
+    }
     else if (command == "bass")
     {
         if (rest.empty())
@@ -307,8 +340,6 @@ CliSessionOutput CliSession::handleLine (std::string_view line)
         }
         else
         {
-            std::error_code ignored;
-            std::filesystem::remove (path, ignored);
             output.feedback = "Error: " + error + "\n";
         }
     }

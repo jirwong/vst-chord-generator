@@ -20,11 +20,22 @@ struct LearningRow
     juce::String bass;
     double durationBeats = 4.0;
     int numericDegree = 0;
+    juce::String lengthExpression;
+    bool usesDefaultLength = true;
+};
+
+struct PublishedTiming
+{
+    chordtext::TimingSettings settings;
+    bool hostSignatureAvailable = false;
+    std::uint64_t requestRevision = 0;
+    std::uint64_t hostRevision = 0;
 };
 
 class ChordTextAudioProcessor final : public juce::AudioProcessor,
                                       public juce::AudioProcessorValueTreeState::Listener,
-                                      private juce::AsyncUpdater
+                                      private juce::AsyncUpdater,
+                                      private juce::Timer
 {
 public:
     ChordTextAudioProcessor();
@@ -49,6 +60,7 @@ public:
     std::vector<LearningRow> getLearningRows() const;
     int getCurrentStep() const;
     juce::String getScaleSummary() const;
+    PublishedTiming getPublishedTiming() const;
     void rebuildPlan(); // message thread only
 
     // Chord-card preview. Gesture methods run on the message thread and
@@ -93,14 +105,19 @@ private:
     // Lets regression checks defer only the pending plan's delivery flag,
     // reproducing legal mailbox ordering without timing-dependent threads.
     friend struct ChordPreviewTestAccess;
+    friend struct LengthTimingTestAccess;
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void handleAsyncUpdate() override;
+    void timerCallback() override;
+
+    void requestPlanRebuild() noexcept;
+    void captureHostTiming (const juce::Optional<juce::AudioPlayHead::PositionInfo>& position) noexcept;
 
     // Message thread only. Never call from processBlock.
-    void publishPlan (chordtext::RenderPlan plan);
+    void publishPlan (chordtext::RenderPlan plan, const PublishedTiming& timing);
 
     // Message thread only.
     bool isPreviewCardEligible (int stepIndex, std::uint64_t displayedRevision) const noexcept;
@@ -110,6 +127,9 @@ private:
     void publishPreviewFeedback (const chordscript::PreviewRequest& request);
 
     enum class MidiFileMode { exportFile, dragClip };
+
+    // Message thread only.
+    bool ensureCurrentTimingForExport (juce::String& errorMessage);
 
     // Message thread only.
     bool writeMidiFile (const juce::File& file, MidiFileMode mode,
@@ -131,6 +151,7 @@ private:
     {
         chordtext::RenderPlan plan;
         std::uint64_t generation = 0;
+        PublishedTiming timing;
     };
 
     // Triple buffer: the message thread owns writePlanIndex, the audio thread
@@ -149,6 +170,16 @@ private:
     // Latest external mode event. Both legacy and new automation write here;
     // only the message thread synchronizes APVTS and rebuilds the plan.
     std::atomic<int> effectiveScaleIndex { 0 };
+
+    // A request may originate on the audio thread when the host meter changes.
+    // The processor timer consumes it on the message thread; completed attempts
+    // stay separate from the last valid published plan.
+    std::atomic<std::uint64_t> requestedPlanRevision { 0 };
+    std::atomic<std::uint64_t> completedPlanRevision { 0 };
+
+    // One atomic word publishes a coherent host signature observation. Bits
+    // 0-7 are numerator, 8-15 denominator, 16 availability, and 17+ revision.
+    std::atomic<std::uint64_t> hostTimingState { 0 };
 
     // Written only by the audio thread, read by the message thread for export.
     // AudioPlayHead::getPosition() is processBlock-only, so export must never
@@ -170,6 +201,9 @@ private:
     std::vector<chordtext::Diagnostic> diagnostics;
     std::vector<LearningRow> learningRows;
     chordtext::RenderPlan exportPlan;
+    PublishedTiming exportPlanTiming;
+    std::uint64_t exportPlanRequestRevision = 0;
+    std::uint64_t learningRowsRequestRevision = 0;
     juce::File lastDragClipFile;
 
     // Request channel: message thread writes, audio thread reads.
@@ -177,7 +211,6 @@ private:
     chordscript::ChordPreviewExchange previewExchange;
     std::atomic<std::uint64_t> previewCancellationEpoch { 0 };
     std::atomic<std::uint64_t> previewDataRevision { 0 };
-    std::atomic<bool> planRebuildPending { false };
 
     // Message thread only.
     std::uint64_t previewCacheRevision = 0;
