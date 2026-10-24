@@ -809,7 +809,7 @@ Or run the already-built executables directly:
 ./build/Tests/CliTests.exe
 ```
 
-Recent runs printed `924 checks, 0 failures` for `TheoryTests`, `16148 checks, 0
+Recent runs printed `924 checks, 0 failures` for `TheoryTests`, `16796 checks, 0
 failures` for `ProcessorTests`, and `366 checks, 0 failures` for `CliTests`. The
 processor count varies because one preview stress check records how many coalesced
 publications the reader observed. Each executable returns a non-zero exit code if any

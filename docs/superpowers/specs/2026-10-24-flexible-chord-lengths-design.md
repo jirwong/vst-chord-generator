@@ -1,7 +1,7 @@
 # Flexible chord lengths
 
 Date: 2026-10-24
-Status: Approved by the user on 2026-10-24, including the Codex decisions. Product implementation has not started.
+Status: Approved by the user on 2026-10-24, including the Codex decisions. Implemented and automatically verified on 2026-10-24 on `codex/flexible-chord-lengths`; see the implementation plan's completion record. Manual DAW checks and an independent final review remain unperformed.
 
 Builder review: Completed on 2026-10-24. No important unanswered decisions were identified.
 
@@ -200,4 +200,4 @@ DAW routing, live meter-change behavior, automation, and drag acceptance require
 
 ## 12. Next step
 
-A fresh builder review found no important unanswered decisions. The user approved the complete design, including the Codex decisions. Next, review the concrete implementation plan. Product implementation follows plan approval.
+Implementation is complete and automatically verified on 2026-10-24. Remaining work is manual DAW verification and an independent final review; see the implementation plan's completion record. Creating a PR follows the user's request and repository template.

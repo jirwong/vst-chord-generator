@@ -83,20 +83,26 @@ meter. The selected **DEFAULT LENGTH** applies only when the token has no suffix
 
 Note fractions accept a positive integer numerator and a denominator of 1, 2,
 4, 8, 16, 32, or 64. `D` means dotted and multiplies by 3/2. `T` means
-triplet and multiplies by 2/3. Lower-case `d` and `t` are accepted. Beat and
-bar amounts accept positive finite decimals. Unit words are case-insensitive.
-Spaces are not allowed inside a suffix.
+triplet and multiplies by 2/3. Lower-case `d` and `t` are accepted and shown
+as uppercase `D`/`T`: `1/8d` displays as `1/8D`. Beat and bar amounts accept
+positive finite decimals. Unit words are case-insensitive. Spaces are not
+allowed inside a suffix. Beat and bar numbers use the legacy numeric parser,
+which also accepts exponent notation such as `1e2` (100 beats).
 
 The plugin's menu has 19 stable choices: half, quarter, eighth, and sixteenth
 notes with straight, dotted, and triplet variants; `3/16`; 1, 2, and 4 beats;
-and 1, 2, and 4 bars. The CLI also accepts valid entered forms such as `5/16`
-that are not menu choices.
+and 1, 2, and 4 bars. Four beats and one bar remain distinct choices and labels
+even when the current meter makes them equal. The CLI also accepts valid entered
+forms such as `5/16` that are not menu choices.
 
 Bar lengths use the DAW's current time signature. One bar is four beats in
 4/4, three beats in 3/4 or 6/8, and 3.5 beats in 7/8. If the DAW does not
-supply a valid signature, the plugin uses 4/4 and marks it as a fallback. A
-host meter change rebuilds bar-based and inherited-bar lengths for the whole
-progression. Explicit note and beat values do not change.
+supply a valid signature, the plugin uses 4/4 and marks it as a fallback. The
+CLI accepts signatures with a numerator from 1 to 255 and a denominator of 1,
+2, 4, 8, 16, 32, or 64; other values are errors. A host meter change
+re-resolves every bar-based step, including inherited steps whose default is a
+bar amount. Note and beat lengths do not change. Changing
+DEFAULT LENGTH during playback affects only inherited steps.
 
 Lengths affect live playback, MIDI export, drag clips, the loop length, and
 the chord cards. A card shows the written or selected length, its resolved
@@ -111,7 +117,7 @@ Cmaj7:0        error: invalid length "0"
 Cmaj7:1/3      error: invalid length "1/3"
 Cmaj7:1/8DT    error: invalid length "1/8DT"
 Cmaj7:1beatD   error: invalid length "1beatD"
-Cmaj7: 2       error: invalid length " 2"
+Cmaj7: 2       error: invalid length ""
 Cmaj7:nan      error: invalid length "nan"
 ```
 
@@ -564,7 +570,7 @@ separator   := "," | "|" | "-" | whitespace
 token       := chord (":" length)?
 length      := bareBeats | noteLength | beatLength | barLength
 bareBeats   := positive finite number
-noteLength  := positiveInteger "/" noteDenominator ("D" | "T")?
+noteLength  := positiveInteger "/" noteDenominator ("D" | "d" | "T" | "t")?
 noteDenominator := "1" | "2" | "4" | "8" | "16" | "32" | "64"
 beatLength  := positive finite number ("beat" | "beats")
 barLength   := positive finite number ("bar" | "bars")
@@ -599,7 +605,10 @@ Notes:
 - `|` and `-` are separators only; they do not change timing.
 - Ordinary tokens cannot contain spaces; spaces separate tokens. Spaces around
   entries inside a custom list are allowed.
-- The length colon belongs to the token, for example `Cmaj7:1/8D`.
+- The length colon belongs to the token, for example `Cmaj7:1/8D`. The colon
+  must be followed by a valid length; a trailing colon is an error.
+- Literal keywords such as `D`, `T`, `beat`, and `bars` are matched
+  case-insensitively.
 - Absolute root accidentals come after the root letter. Roman accidentals come
   before the numeral.
 
