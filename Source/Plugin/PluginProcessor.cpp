@@ -31,6 +31,8 @@ constexpr std::array<const char*, 17> keyNames {
 
 constexpr std::array<int, 3> rangeLowMidi { 36, 48, 60 };
 constexpr std::array<int, 3> rangeHighMidi { 72, 84, 96 };
+constexpr auto hostTimingAvailabilityBit = std::uint64_t {1} << 16;
+constexpr auto hostTimingRevisionShift = 17;
 
 // Internal parameter echoes are synchronous on the calling thread. A thread-local
 // guard does not suppress a real automation event arriving on another thread.
@@ -40,6 +42,43 @@ double positiveFmod (double value, double modulus)
 {
     const auto remainder = std::fmod (value, modulus);
     return remainder < 0.0 ? remainder + modulus : remainder;
+}
+
+juce::StringArray defaultLengthChoices()
+{
+    juce::StringArray choices;
+    for (const auto& preset : chordtext::lengthPresets())
+        choices.add (juce::String (preset.displayName.data()));
+    return choices;
+}
+
+std::uint64_t encodeHostTiming (chordtext::TimeSignature signature, bool available,
+                                std::uint64_t revision) noexcept
+{
+    return static_cast<std::uint64_t> (signature.numerator & 0xff)
+         | (static_cast<std::uint64_t> (signature.denominator & 0xff) << 8)
+         | (available ? hostTimingAvailabilityBit : 0)
+         | (revision << hostTimingRevisionShift);
+}
+
+chordtext::TimeSignature decodeHostTimingSignature (std::uint64_t state) noexcept
+{
+    chordtext::TimeSignature signature {
+        static_cast<int> (state & 0xff),
+        static_cast<int> ((state >> 8) & 0xff)
+    };
+    return chordtext::isValidTimeSignature (signature) ? signature
+                                                        : chordtext::TimeSignature {};
+}
+
+bool decodeHostTimingAvailability (std::uint64_t state) noexcept
+{
+    return (state & hostTimingAvailabilityBit) != 0;
+}
+
+std::uint64_t decodeHostTimingRevision (std::uint64_t state) noexcept
+{
+    return state >> hostTimingRevisionShift;
 }
 
 // Finds the step whose note-ons have started at or before phase and whose
@@ -105,22 +144,26 @@ ChordTextAudioProcessor::ChordTextAudioProcessor()
     apvts.addParameterListener ("mode", this);
     apvts.addParameterListener ("scaleMode", this);
     apvts.addParameterListener ("bassOctaves", this);
+    apvts.addParameterListener ("defaultLength", this);
     apvts.addParameterListener ("voicing", this);
     apvts.addParameterListener ("range", this);
     apvts.addParameterListener ("velocity", this);
     apvts.addParameterListener ("loop", this);
 
     setProgressionText ("Cmaj7, Am7, Dm7, G7");
+    startTimerHz (30);
 }
 
 ChordTextAudioProcessor::~ChordTextAudioProcessor()
 {
+    stopTimer();
     cancelPendingUpdate();
 
     apvts.removeParameterListener ("key", this);
     apvts.removeParameterListener ("mode", this);
     apvts.removeParameterListener ("scaleMode", this);
     apvts.removeParameterListener ("bassOctaves", this);
+    apvts.removeParameterListener ("defaultLength", this);
     apvts.removeParameterListener ("voicing", this);
     apvts.removeParameterListener ("range", this);
     apvts.removeParameterListener ("velocity", this);
@@ -166,6 +209,10 @@ ChordTextAudioProcessor::createParameterLayout()
         juce::ParameterID { "bassOctaves", 1 }, "Bass",
         juce::StringArray { "Off", "1 octave down", "2 octaves down", "3 octaves down" }, 0));
 
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { "defaultLength", 1 }, "Default Length",
+        defaultLengthChoices(), 15));
+
     return layout;
 }
 
@@ -193,16 +240,14 @@ void ChordTextAudioProcessor::parameterChanged (const juce::String& parameterID,
                                          || parameterID == "voicing"
                                          || parameterID == "range"
                                          || parameterID == "velocity"
-                                         || parameterID == "bassOctaves";
+                                         || parameterID == "bassOctaves"
+                                         || parameterID == "defaultLength";
 
     if (requiresRebuiltVoicings)
     {
-        planRebuildPending.store (true, std::memory_order_release);
-        previewDataRevision.fetch_add (1, std::memory_order_acq_rel);
+        requestPlanRebuild();
+        triggerAsyncUpdate();
     }
-
-    cancelChordPreview();
-    triggerAsyncUpdate();
 }
 
 void ChordTextAudioProcessor::handleAsyncUpdate()
@@ -216,9 +261,63 @@ void ChordTextAudioProcessor::handleAsyncUpdate()
         if (selected <= 1 && parameterIndex ("mode") != selected)
             apvts.getParameter ("mode")->setValueNotifyingHost (static_cast<float> (selected));
     }
-    rebuildPlan();
-    if (effectiveScaleIndex.load (std::memory_order_relaxed) != selected)
+    if (isPlanRebuildPending())
+        rebuildPlan();
+    if (effectiveScaleIndex.load (std::memory_order_relaxed) != selected
+        || isPlanRebuildPending())
         triggerAsyncUpdate();
+}
+
+void ChordTextAudioProcessor::timerCallback()
+{
+    if (isPlanRebuildPending())
+        rebuildPlan();
+}
+
+void ChordTextAudioProcessor::requestPlanRebuild() noexcept
+{
+    requestedPlanRevision.fetch_add (1, std::memory_order_acq_rel);
+    previewDataRevision.fetch_add (1, std::memory_order_acq_rel);
+    cancelChordPreview();
+}
+
+void ChordTextAudioProcessor::captureHostTiming (
+    const juce::Optional<juce::AudioPlayHead::PositionInfo>& position) noexcept
+{
+    auto signature = chordtext::TimeSignature {};
+    auto available = false;
+
+    if (position.hasValue())
+    {
+        if (const auto hostSignature = position->getTimeSignature())
+        {
+            const chordtext::TimeSignature candidate {hostSignature->numerator,
+                                                       hostSignature->denominator};
+            if (chordtext::isValidTimeSignature (candidate))
+            {
+                signature = candidate;
+                available = true;
+            }
+        }
+    }
+
+    auto observed = hostTimingState.load (std::memory_order_acquire);
+    for (;;)
+    {
+        if (decodeHostTimingSignature (observed) == signature
+            && decodeHostTimingAvailability (observed) == available)
+            return;
+
+        const auto replacement = encodeHostTiming (
+            signature, available, decodeHostTimingRevision (observed) + 1);
+        if (hostTimingState.compare_exchange_weak (observed, replacement,
+                                                   std::memory_order_acq_rel,
+                                                   std::memory_order_acquire))
+        {
+            requestPlanRebuild();
+            return;
+        }
+    }
 }
 
 int ChordTextAudioProcessor::parameterIndex (const juce::String& parameterID) const
@@ -241,6 +340,7 @@ chordtext::Key ChordTextAudioProcessor::selectedKey() const
 void ChordTextAudioProcessor::setProgressionText (juce::String text)
 {
     apvts.state.setProperty ("progressionText", text, nullptr);
+    requestPlanRebuild();
     rebuildPlan();
 }
 
@@ -275,6 +375,21 @@ juce::String ChordTextAudioProcessor::getScaleSummary() const
     return summary;
 }
 
+PublishedTiming ChordTextAudioProcessor::getPublishedTiming() const
+{
+    PublishedTiming result;
+    const auto defaultIndex = std::clamp (parameterIndex ("defaultLength"), 0,
+                                          static_cast<int> (chordtext::lengthPresets().size()) - 1);
+    result.settings.defaultLength = chordtext::lengthPresets()[static_cast<std::size_t> (defaultIndex)].length;
+
+    const auto hostState = hostTimingState.load (std::memory_order_acquire);
+    result.settings.signature = decodeHostTimingSignature (hostState);
+    result.hostSignatureAvailable = decodeHostTimingAvailability (hostState);
+    result.requestRevision = requestedPlanRevision.load (std::memory_order_acquire);
+    result.hostRevision = decodeHostTimingRevision (hostState);
+    return result;
+}
+
 std::uint64_t ChordTextAudioProcessor::getPreviewCardRevision() const noexcept
 {
     if (previewInputPending || previewCacheRevision == 0 || previewPitchMasks.empty())
@@ -288,7 +403,8 @@ std::uint64_t ChordTextAudioProcessor::getPreviewCardRevision() const noexcept
 
 bool ChordTextAudioProcessor::isPlanRebuildPending() const noexcept
 {
-    return planRebuildPending.load (std::memory_order_acquire);
+    return requestedPlanRevision.load (std::memory_order_acquire)
+        != completedPlanRevision.load (std::memory_order_acquire);
 }
 
 bool ChordTextAudioProcessor::isPreviewCardEligible (int stepIndex,
@@ -430,22 +546,34 @@ void ChordTextAudioProcessor::publishPreviewFeedback (
 
 void ChordTextAudioProcessor::rebuildPlan()
 {
-    // Every rebuild invalidates the old preview snapshot. The revision capture
-    // below keeps a cache published by an older rebuild from becoming eligible.
-    const auto revision = previewDataRevision.fetch_add (1, std::memory_order_acq_rel) + 1;
-    previewCacheRevision = 0;
-    previewPitchMasks.clear();
-    previewVelocity = 100;
-    planRebuildPending.store (false, std::memory_order_release);
-    cancelChordPreview();
+    const auto timing = getPublishedTiming();
+    const auto requestRevision = timing.requestRevision;
+    const auto previewRevision = previewDataRevision.load (std::memory_order_acquire);
+    const auto isCurrentAttempt = [this, requestRevision]
+    {
+        return requestedPlanRevision.load (std::memory_order_acquire) == requestRevision;
+    };
+    const auto finishAttempt = [this, requestRevision]
+    {
+        completedPlanRevision.store (requestRevision, std::memory_order_release);
+    };
 
     const auto key = selectedKey();
-    const auto parsed = chordtext::parseProgression (getProgressionText().toStdString(), key);
-
-    diagnostics = parsed.diagnostics;
+    const auto parsed = chordtext::parseProgression (getProgressionText().toStdString(), key,
+                                                      timing.settings);
 
     if (! parsed.progression.has_value())
+    {
+        if (isCurrentAttempt())
+        {
+            diagnostics = parsed.diagnostics;
+            previewCacheRevision = 0;
+            previewPitchMasks.clear();
+            previewVelocity = 100;
+        }
+        finishAttempt();
         return;
+    }
 
     const auto voicingIndex = parameterIndex ("voicing");
     const auto rangeIndex = std::clamp (parameterIndex ("range"), 0, 2);
@@ -461,8 +589,16 @@ void ChordTextAudioProcessor::rebuildPlan()
     const auto resolution = chordtext::resolveProgression (progression, settings, bassOctaves);
     if (! resolution.diagnostics.empty() || ! resolution.chords.has_value())
     {
-        diagnostics.insert (diagnostics.end(), resolution.diagnostics.begin(),
-                            resolution.diagnostics.end());
+        if (isCurrentAttempt())
+        {
+            diagnostics = parsed.diagnostics;
+            diagnostics.insert (diagnostics.end(), resolution.diagnostics.begin(),
+                                resolution.diagnostics.end());
+            previewCacheRevision = 0;
+            previewPitchMasks.clear();
+            previewVelocity = 100;
+        }
+        finishAttempt();
         return;
     }
 
@@ -472,27 +608,19 @@ void ChordTextAudioProcessor::rebuildPlan()
         voicings.push_back (chord.pitches);
     const auto velocity = std::clamp (parameterIndex ("velocity"), 1, 127);
 
-    publishPlan (chordtext::buildRenderPlan (progression, voicings, velocity));
-
-    // Only a coherent rebuild may refresh the preview cache.
-    if (previewDataRevision.load (std::memory_order_acquire) == revision)
-    {
-        previewPitchMasks.assign (voicings.size(), std::array<std::uint64_t, 2> {});
-        for (std::size_t index = 0; index < voicings.size(); ++index)
+    auto plan = chordtext::buildRenderPlan (progression, voicings, velocity);
+    std::vector<std::array<std::uint64_t, 2>> stagedPreviewMasks (
+        voicings.size(), std::array<std::uint64_t, 2> {});
+    for (std::size_t index = 0; index < voicings.size(); ++index)
+        for (const auto pitch : voicings[index])
         {
-            for (const auto pitch : voicings[index])
-            {
-                const auto clamped = std::clamp (pitch, 0, 127);
-                previewPitchMasks[index][static_cast<std::size_t> (clamped / 64)]
-                    |= std::uint64_t { 1 } << (clamped % 64);
-            }
+            const auto clamped = std::clamp (pitch, 0, 127);
+            stagedPreviewMasks[index][static_cast<std::size_t> (clamped / 64)]
+                |= std::uint64_t { 1 } << (clamped % 64);
         }
-        previewVelocity = velocity;
-        previewCacheRevision = revision;
-    }
 
-    learningRows.clear();
-    learningRows.reserve (progression.steps.size());
+    std::vector<LearningRow> stagedRows;
+    stagedRows.reserve (progression.steps.size());
 
     for (std::size_t index = 0; index < progression.steps.size(); ++index)
     {
@@ -524,19 +652,48 @@ void ChordTextAudioProcessor::rebuildPlan()
                                                   *(*resolution.chords)[index].bassMidi);
         row.durationBeats = step.durationBeats;
         row.numericDegree = step.numericDegree;
-        learningRows.push_back (std::move (row));
+        row.lengthExpression = juce::String::fromUTF8 (step.lengthExpression.c_str());
+        row.usesDefaultLength = step.usesDefaultLength;
+        stagedRows.push_back (std::move (row));
     }
+
+    // A newer request can arrive from processBlock while this message-thread
+    // attempt is resolving a plan. Keep the last valid plan in that case and
+    // let the timer rebuild from the newer coherent timing observation.
+    if (! isCurrentAttempt())
+    {
+        finishAttempt();
+        return;
+    }
+
+    publishPlan (std::move (plan), timing);
+
+    if (previewDataRevision.load (std::memory_order_acquire) == previewRevision)
+    {
+        diagnostics.clear();
+        previewPitchMasks = std::move (stagedPreviewMasks);
+        previewVelocity = velocity;
+        previewCacheRevision = previewRevision;
+        learningRows = std::move (stagedRows);
+        learningRowsRequestRevision = requestRevision;
+    }
+
+    finishAttempt();
 }
 
-void ChordTextAudioProcessor::publishPlan (chordtext::RenderPlan plan)
+void ChordTextAudioProcessor::publishPlan (chordtext::RenderPlan plan,
+                                           const PublishedTiming& timing)
 {
     ++nextPlanGeneration;
 
     exportPlan = plan;
+    exportPlanTiming = timing;
+    exportPlanRequestRevision = timing.requestRevision;
 
     auto& slot = planSlots[static_cast<std::size_t> (writePlanIndex)];
     slot.plan = std::move (plan);
     slot.generation = nextPlanGeneration;
+    slot.timing = timing;
 
     const auto previous = sharedPlanIndex.exchange (
         static_cast<std::uint32_t> (writePlanIndex) | freshPlanBit,
@@ -816,6 +973,10 @@ void ChordTextAudioProcessor::processBlock (juce::AudioBuffer<float>& audio,
     if (hostPlayHead != nullptr)
         position = hostPlayHead->getPosition();
 
+    // This is the only place host timing is read. The capture publishes a
+    // coherent value for the message-thread timer without allocating or
+    // posting work from the audio callback.
+    captureHostTiming (position);
     playheadAvailable.store (position.hasValue(), std::memory_order_relaxed);
 
     juce::Optional<double> ppqPosition;
@@ -1005,9 +1166,18 @@ void ChordTextAudioProcessor::processBlock (juce::AudioBuffer<float>& audio,
     }
     else
     {
-        for (auto segment = 0; segment < 64 && remainingBeats > beatEpsilon; ++segment)
+        while (remainingBeats > beatEpsilon)
         {
             const auto toLoopEnd = loopLengthBeats - phase;
+
+            // A finite positive loop length must advance the scheduler. The
+            // guard only handles impossible arithmetic state; normal boundary
+            // handling below resets phase exactly to zero.
+            if (! std::isfinite (toLoopEnd) || toLoopEnd <= 0.0)
+            {
+                releaseActiveNotes (midi, maxSampleOffset);
+                break;
+            }
 
             if (remainingBeats < toLoopEnd - beatEpsilon)
             {
@@ -1023,9 +1193,6 @@ void ChordTextAudioProcessor::processBlock (juce::AudioBuffer<float>& audio,
                 releaseActiveNotes (midi, offsetForRelativeBeat (relativeStart));
             }
         }
-
-        if (remainingBeats > beatEpsilon)
-            releaseActiveNotes (midi, maxSampleOffset);
     }
 
     auto anyActive = false;
@@ -1182,14 +1349,16 @@ void ChordTextAudioProcessor::setStateInformation (const void* data, int sizeInB
         bassState.setProperty ("value", 0, nullptr);
         tree.addChild (bassState, -1, nullptr);
     }
+    auto defaultLengthState = tree.getChildWithProperty ("id", "defaultLength");
+    if (! defaultLengthState.isValid())
+    {
+        defaultLengthState = juce::ValueTree ("PARAM");
+        defaultLengthState.setProperty ("id", "defaultLength", nullptr);
+        defaultLengthState.setProperty ("value", 15, nullptr);
+        tree.addChild (defaultLengthState, -1, nullptr);
+    }
     const auto selected = std::clamp (static_cast<int> (scaleState.getProperty ("value", 0)), 0, 8);
     scaleState.setProperty ("value", selected, nullptr);
-
-    // Invalidate preview before any deferred message-thread rebuild. The
-    // revision advance rejects the old pitch snapshot immediately.
-    planRebuildPending.store (true, std::memory_order_release);
-    previewDataRevision.fetch_add (1, std::memory_order_acq_rel);
-    cancelChordPreview();
 
     // The plan rebuild owns message-thread-only state. Restoring state from a
     // host is expected on the message thread; if a host breaks that contract,
@@ -1204,6 +1373,11 @@ void ChordTextAudioProcessor::setStateInformation (const void* data, int sizeInB
         effectiveScaleIndex.store (selected, std::memory_order_relaxed);
     }
     cancelPendingUpdate();
+
+    // Invalidate preview before any deferred message-thread rebuild. The
+    // revision channel rejects the old pitch snapshot immediately and keeps a
+    // stale async callback from clearing a newer pending request.
+    requestPlanRebuild();
 
     if (onMessageThread)
         rebuildPlan();

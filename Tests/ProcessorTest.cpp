@@ -24,6 +24,18 @@ public:
         bpm = bpmIn;
     }
 
+    void setTimeSignature (int numeratorIn, int denominatorIn)
+    {
+        hasTimeSignature = true;
+        numerator = numeratorIn;
+        denominator = denominatorIn;
+    }
+
+    void clearTimeSignature()
+    {
+        hasTimeSignature = false;
+    }
+
     juce::Optional<PositionInfo> getPosition() const override
     {
         ++positionCalls;
@@ -32,6 +44,8 @@ public:
         info.setPpqPosition (ppq);
         info.setBpm (bpm);
         info.setIsPlaying (playing);
+        if (hasTimeSignature)
+            info.setTimeSignature (TimeSignature {numerator, denominator});
         return info;
     }
 
@@ -41,7 +55,18 @@ private:
     double ppq = 0.0;
     bool playing = true;
     double bpm = 120.0;
+    int numerator = 4;
+    int denominator = 4;
+    bool hasTimeSignature = false;
     mutable int positionCalls = 0;
+};
+
+struct LengthTimingTestAccess
+{
+    static void deliverTimer (ChordTextAudioProcessor& processor)
+    {
+        processor.timerCallback();
+    }
 };
 
 static std::vector<int> noteOnPitches (const juce::MidiBuffer& midi)
@@ -156,10 +181,205 @@ static juce::Component* findEditorChild (juce::Component& parent, const juce::St
     return nullptr;
 }
 
+static void checkDefaultLengthStateAndHostTiming()
+{
+    ChordTextAudioProcessor stateProcessor;
+    auto* defaultLength = dynamic_cast<juce::AudioParameterChoice*> (
+        stateProcessor.apvts.getParameter ("defaultLength"));
+    CHECK (defaultLength != nullptr);
+    CHECK (stateProcessor.getParameters().size() == 9);
+    if (defaultLength != nullptr)
+    {
+        CHECK (defaultLength->choices.size() == 19);
+        CHECK (defaultLength->getIndex() == 15);
+        CHECK (defaultLength->choices[0] == "1/2");
+        CHECK (defaultLength->choices[12] == "3/16");
+        CHECK (defaultLength->choices[15] == "4 beats");
+        CHECK (defaultLength->choices[18] == "4 bars");
+        CHECK (stateProcessor.getParameters().getUnchecked (8) == defaultLength);
+
+        defaultLength->setValueNotifyingHost (16.0f / 18.0f);
+        auto oldState = stateProcessor.apvts.copyState();
+        oldState.removeChild (oldState.getChildWithProperty ("id", "defaultLength"), nullptr);
+        juce::MemoryBlock oldBytes;
+        juce::AudioProcessor::copyXmlToBinary (*oldState.createXml(), oldBytes);
+        stateProcessor.setStateInformation (oldBytes.getData(), static_cast<int> (oldBytes.getSize()));
+        CHECK (choiceIndex (stateProcessor, "defaultLength") == 15);
+
+        defaultLength->setValueNotifyingHost (7.0f / 18.0f);
+        stateProcessor.setProgressionText ("C, Dm:2");
+        const auto rows = stateProcessor.getLearningRows();
+        CHECK (rows.size() == 2);
+        if (rows.size() == 2)
+        {
+            CHECK_NEAR (rows[0].durationBeats, 0.75, 1.0e-12);
+            CHECK_NEAR (rows[1].durationBeats, 2.0, 1.0e-12);
+            CHECK (rows[0].usesDefaultLength);
+            CHECK (! rows[1].usesDefaultLength);
+            CHECK (rows[0].lengthExpression == "1/8D");
+        }
+    }
+
+    ChordTextAudioProcessor processor;
+    processor.setProgressionText ("C:1bar");
+    FakePlayHead head;
+    processor.setPlayHead (&head);
+    processor.prepareToPlay (48000.0, 512);
+    juce::AudioBuffer<float> audio (0, 512);
+    juce::MidiBuffer midi;
+
+    head.set (0.0, true, 120.0);
+    head.setTimeSignature (4, 4);
+    const auto beforeFirstBlock = head.getPositionCalls();
+    processor.processBlock (audio, midi);
+    CHECK (head.getPositionCalls() == beforeFirstBlock + 1);
+    auto timing = processor.getPublishedTiming();
+    CHECK (timing.hostSignatureAvailable);
+    CHECK ((timing.settings.signature == chordtext::TimeSignature {4, 4}));
+    LengthTimingTestAccess::deliverTimer (processor);
+
+    head.set (0.0, true, 120.0);
+    head.setTimeSignature (6, 8);
+    const auto beforeMeterChange = head.getPositionCalls();
+    processor.processBlock (audio, midi);
+    CHECK (head.getPositionCalls() == beforeMeterChange + 1);
+    timing = processor.getPublishedTiming();
+    CHECK (timing.hostSignatureAvailable);
+    CHECK ((timing.settings.signature == chordtext::TimeSignature {6, 8}));
+    LengthTimingTestAccess::deliverTimer (processor);
+    const auto sixEightRows = processor.getLearningRows();
+    CHECK (sixEightRows.size() == 1);
+    if (sixEightRows.size() == 1)
+        CHECK_NEAR (sixEightRows[0].durationBeats, 3.0, 1.0e-12);
+
+    head.clearTimeSignature();
+    processor.processBlock (audio, midi);
+    timing = processor.getPublishedTiming();
+    CHECK (! timing.hostSignatureAvailable);
+    CHECK ((timing.settings.signature == chordtext::TimeSignature {4, 4}));
+    LengthTimingTestAccess::deliverTimer (processor);
+    const auto fallbackRows = processor.getLearningRows();
+    CHECK (fallbackRows.size() == 1);
+    if (fallbackRows.size() == 1)
+        CHECK_NEAR (fallbackRows[0].durationBeats, 4.0, 1.0e-12);
+
+    ChordTextAudioProcessor noMeterProcessor;
+    noMeterProcessor.setProgressionText ("C");
+    noMeterProcessor.setPlayHead (&head);
+    noMeterProcessor.prepareToPlay (48000.0, 512);
+    head.set (0.0, true, 120.0);
+    head.clearTimeSignature();
+    noMeterProcessor.processBlock (audio, midi);
+    CHECK (! noteOnPitches (midi).empty());
+}
+
+static void checkLiveLengthResynchronization()
+{
+    auto setRootPosition = [] (ChordTextAudioProcessor& processor)
+    {
+        processor.apvts.getParameter ("voicing")->setValueNotifyingHost (1.0f);
+    };
+
+    // A meter-driven plan replacement releases the old chord, then resyncs at
+    // the current song position using the new loop length.
+    {
+        ChordTextAudioProcessor processor;
+        setRootPosition (processor);
+        processor.setProgressionText ("C:1bar, G:1bar");
+        FakePlayHead head;
+        processor.setPlayHead (&head);
+        processor.prepareToPlay (48000.0, 512);
+        juce::AudioBuffer<float> audio (0, 512);
+
+        head.set (7.0, true, 120.0);
+        head.setTimeSignature (4, 4);
+        juce::MidiBuffer beforeChange;
+        processor.processBlock (audio, beforeChange);
+        CHECK ((noteOnPitches (beforeChange) == std::vector<int> {55, 59, 62}));
+        LengthTimingTestAccess::deliverTimer (processor);
+
+        head.setTimeSignature (3, 4);
+        juce::MidiBuffer meterObserved;
+        processor.processBlock (audio, meterObserved);
+        LengthTimingTestAccess::deliverTimer (processor);
+
+        juce::MidiBuffer resynchronised;
+        processor.processBlock (audio, resynchronised);
+        CHECK ((sortedUnique (noteOffPitches (resynchronised)) == std::vector<int> {55, 59, 62}));
+        CHECK ((noteOnPitches (resynchronised) == std::vector<int> {48, 52, 55}));
+        CHECK (noteOffsPrecedeNoteOns (resynchronised));
+    }
+
+    // With Loop off, the same position is beyond the revised six-beat plan and
+    // therefore only releases the old notes.
+    {
+        ChordTextAudioProcessor processor;
+        setRootPosition (processor);
+        processor.setProgressionText ("C:1bar, G:1bar");
+        processor.apvts.getParameter ("loop")->setValueNotifyingHost (0.0f);
+        FakePlayHead head;
+        processor.setPlayHead (&head);
+        processor.prepareToPlay (48000.0, 512);
+        juce::AudioBuffer<float> audio (0, 512);
+
+        head.set (7.0, true, 120.0);
+        head.setTimeSignature (4, 4);
+        juce::MidiBuffer beforeChange;
+        processor.processBlock (audio, beforeChange);
+        CHECK ((noteOnPitches (beforeChange) == std::vector<int> {55, 59, 62}));
+        LengthTimingTestAccess::deliverTimer (processor);
+
+        head.setTimeSignature (3, 4);
+        juce::MidiBuffer meterObserved;
+        processor.processBlock (audio, meterObserved);
+        LengthTimingTestAccess::deliverTimer (processor);
+
+        juce::MidiBuffer ended;
+        processor.processBlock (audio, ended);
+        CHECK ((sortedUnique (noteOffPitches (ended)) == std::vector<int> {55, 59, 62}));
+        CHECK (noteOnPitches (ended).empty());
+    }
+
+    // Default changes affect only inherited steps.
+    {
+        ChordTextAudioProcessor processor;
+        processor.setProgressionText ("C, G:2");
+        processor.apvts.getParameter ("defaultLength")->setValueNotifyingHost (13.0f / 18.0f);
+        processor.rebuildPlan();
+        const auto rows = processor.getLearningRows();
+        CHECK (rows.size() == 2);
+        if (rows.size() == 2)
+        {
+            CHECK_NEAR (rows[0].durationBeats, 1.0, 1.0e-12);
+            CHECK_NEAR (rows[1].durationBeats, 2.0, 1.0e-12);
+        }
+    }
+
+    // 1/64T is a supported loop, so a one-second block at 240 BPM contains
+    // all 96 chord attacks rather than stopping at the historical 64 loops.
+    {
+        ChordTextAudioProcessor processor;
+        setRootPosition (processor);
+        processor.setProgressionText ("C:1/64T");
+        FakePlayHead head;
+        head.set (0.0, true, 240.0);
+        processor.setPlayHead (&head);
+        processor.prepareToPlay (48000.0, 48000);
+        juce::AudioBuffer<float> audio (0, 48000);
+        juce::MidiBuffer midi;
+        processor.processBlock (audio, midi);
+        const auto attacks = noteOnPitches (midi);
+        CHECK (std::count (attacks.begin(), attacks.end(), 48) == 96);
+        CHECK (countNoteOffs (midi) >= 96 * 3);
+    }
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
     runChordPreviewChecks();
+    checkDefaultLengthStateAndHostTiming();
+    checkLiveLengthResynchronization();
 
     // UI preferences are validated and shared through a local file, not project state.
     {
@@ -368,7 +588,7 @@ int main()
             CHECK (before == after);
             CHECK (! juce::AudioProcessor::getXmlFromBinary (after.getData(), static_cast<int> (after.getSize()))
                         ->toString().contains ("uiScalePercent"));
-            CHECK (firstProcessor.getParameters().size() == 8);
+            CHECK (firstProcessor.getParameters().size() == 9);
             firstProcessor.setStateInformation (before.getData(), static_cast<int> (before.getSize()));
             CHECK (first.getWidth() == 1200 && selector->getSelectedId() == 125);
             second.reset();
@@ -465,7 +685,7 @@ int main()
         CHECK (legacy != nullptr && legacy->choices.size() == 2);
         CHECK (scale != nullptr && scale->choices.size() == 9);
         CHECK (legacy->convertFrom0to1 (1.0f) == 1.0f);
-        CHECK (p.getParameters().getUnchecked (p.getParameters().size() - 2) == scale);
+        CHECK (p.getParameters().getUnchecked (p.getParameters().size() - 3) == scale);
         if (scale != nullptr)
         {
             p.setProgressionText ("1, 2(7)");
@@ -832,9 +1052,13 @@ int main()
         CHECK (bass != nullptr && bass->choices[2] == "2 octaves down");
         CHECK (bass != nullptr && bass->choices[3] == "3 octaves down");
         CHECK (bass != nullptr && bass->getIndex() == 0 && bass->isAutomatable());
-        CHECK (p.getParameters().getLast() == bass);
-        CHECK (p.getParameters().getUnchecked (p.getParameters().size() - 2)
+        auto* defaultLength = dynamic_cast<juce::AudioParameterChoice*> (
+            p.apvts.getParameter ("defaultLength"));
+        CHECK (defaultLength != nullptr && defaultLength->getIndex() == 15);
+        CHECK (p.getParameters().getUnchecked (p.getParameters().size() - 2) == bass);
+        CHECK (p.getParameters().getUnchecked (p.getParameters().size() - 3)
                == p.apvts.getParameter ("scaleMode"));
+        CHECK (p.getParameters().getLast() == defaultLength);
         if (bass != nullptr)
         {
             for (int offset = 0; offset <= 3; ++offset)
