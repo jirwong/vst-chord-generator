@@ -381,10 +381,14 @@ the plugin window scale together. The layout keeps its proportions.
 
 | Scale | Window size before host display scaling |
 |---|---|
-| 75% | 720 × 488 |
-| 100% | 960 × 650 |
-| 125% | 1200 × 813 |
-| 150% | 1440 × 975 |
+| 75% | 720 × 563 |
+| 100% | 960 × 750 |
+| 125% | 1200 × 938 |
+| 150% | 1440 × 1125 |
+
+The chord sequencer shows two rows of cards. At 100% that is eight chords; longer
+progressions scroll vertically. The 150% size needs roughly 1130 px of usable
+screen height.
 
 The current window changes immediately. Other open windows keep their size.
 Each editor reads the saved preference when it opens, including editors in other DAWs.
@@ -867,9 +871,10 @@ Known limitations in v1:
   directly.
 - The drag subtitle uses the current effective meter for its bar count. The drag
   file remains beat-based and deliberately has no tempo or time-signature events.
-- The editor uses a 960×650 base layout with four UI scales from 75% to 150%. The
-  DEFAULT LENGTH and BASS menus sit beside the scale summary. Actual host window
-  resizing and mixed-DPI display behavior still require DAW checks.
+- The editor uses a 960×750 base layout with four UI scales from 75% to 150%. The
+  DEFAULT LENGTH and BASS menus sit beside the scale summary. At 150% the window is
+  about 1125 px tall, so it needs a display with at least that much usable height.
+  Actual host window resizing and mixed-DPI display behavior still require DAW checks.
 - Host state restore is assumed to run on the message thread. If a host calls
   `setStateInformation` on another thread, the plugin defers the plan rebuild to the
   message queue. The host is still responsible for serialising state changes.
@@ -932,6 +937,8 @@ runs them.
 - [ ] Zoom and scroll the chord sequence, then left-press and right-click a visible
       card at 75%, 100%, 125%, and 150%; confirm the intended card sounds and
       releases.
+- [ ] Confirm the sequencer shows two rows (eight chords at 100%) and that a ninth
+      chord scrolls into view without resizing the window.
 - [ ] Release a preview exactly at a chord boundary and confirm the next chord starts
       once, with no duplicate note-ons or restart.
 - [ ] Change the text to `C, Cmaj7, Dmaj7, Emin9, Fmaj7` and confirm the notes.
