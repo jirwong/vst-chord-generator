@@ -29,7 +29,7 @@ public:
     std::function<void (int, std::uint64_t)> onToggleHeldPreview;
 
 private:
-    class CardContent final : public juce::Component
+    class CardContent final : public juce::Component, public juce::SettableTooltipClient
     {
     public:
         void setRows (std::vector<LearningRow> newRows, int currentStep, bool stale,
@@ -39,6 +39,8 @@ private:
         void paint (juce::Graphics&) override;
         void mouseDown (const juce::MouseEvent&) override;
         void mouseUp (const juce::MouseEvent&) override;
+        void mouseMove (const juce::MouseEvent&) override;
+        void mouseExit (const juce::MouseEvent&) override;
 
         int getContentHeightForWidth (int width) const;
         juce::Rectangle<int> cardBounds (int index) const;
@@ -109,10 +111,12 @@ private:
     juce::Label rangeLabel;
     juce::Label velocityLabel;
     juce::Label scaleSummaryLabel;
+    juce::Label bassLabel;
     juce::ComboBox keyBox;
     juce::ComboBox modeBox;
     juce::ComboBox voicingBox;
     juce::ComboBox rangeBox;
+    juce::ComboBox bassBox;
     juce::Slider velocitySlider;
     juce::ToggleButton loopButton { "Loop" };
     juce::TextButton exportButton { "Export MIDI" };
@@ -126,6 +130,7 @@ private:
     juce::Label statusLabel;
     juce::TextEditor diagnosticsDisplay;
     ChordSequenceComponent sequenceView;
+    juce::TooltipWindow tooltipWindow;
 
     using ComboBoxAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -137,6 +142,7 @@ private:
     std::unique_ptr<ComboBoxAttachment> modeAttachment;
     std::unique_ptr<ComboBoxAttachment> voicingAttachment;
     std::unique_ptr<ComboBoxAttachment> rangeAttachment;
+    std::unique_ptr<ComboBoxAttachment> bassAttachment;
     std::unique_ptr<SliderAttachment> velocityAttachment;
     std::unique_ptr<ButtonAttachment> loopAttachment;
 

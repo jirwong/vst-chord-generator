@@ -1542,6 +1542,99 @@ int main()
         }
     }
 
+    // Bass control stays beside the scale summary at every UI scale.
+    {
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("[C5,E4,G4]");
+        const auto settingsDirectory = juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("build/Tests/ui-settings")
+            .getChildFile (juce::Uuid().toString());
+        CHECK (settingsDirectory.createDirectory().wasOk());
+        ChordTextAudioProcessorEditor editor (
+            p, UiSettings (settingsDirectory.getChildFile ("bass-ui.json")));
+        editor.setVisible (true);
+
+        auto* scale = dynamic_cast<juce::ComboBox*> (findEditorChild (editor, "uiScaleBox"));
+        auto* summary = dynamic_cast<juce::Label*> (findEditorChild (editor, "scaleSummary"));
+        auto* bassLabel = dynamic_cast<juce::Label*> (findEditorChild (editor, "bassLabel"));
+        auto* bass = dynamic_cast<juce::ComboBox*> (findEditorChild (editor, "bassBox"));
+        auto* loop = findEditorChild (editor, "loopButton");
+        const auto snapshotDirectory = juce::SystemStats::getEnvironmentVariable (
+            "CHORDSCRIPT_UI_SNAPSHOT_DIR", {});
+        const auto capture = [&] (const juce::String& name)
+        {
+            if (snapshotDirectory.isEmpty())
+                return;
+            juce::File directory (snapshotDirectory);
+            CHECK (directory.createDirectory().wasOk());
+            juce::FileOutputStream output (directory.getChildFile (name + ".png"));
+            CHECK (output.openedOk());
+            output.setPosition (0);
+            output.truncate();
+            CHECK (juce::PNGImageFormat().writeImageToStream (
+                editor.createComponentSnapshot (editor.getLocalBounds()), output));
+        };
+
+        CHECK (scale != nullptr && summary != nullptr && bassLabel != nullptr
+               && bass != nullptr && loop != nullptr);
+        if (scale != nullptr && summary != nullptr && bassLabel != nullptr
+            && bass != nullptr && loop != nullptr)
+        {
+            CHECK (bassLabel->getText() == "BASS");
+            CHECK (bass->getNumItems() == 4);
+            CHECK (bass->getSelectedId() == 1);
+            CHECK (choiceIndex (p, "bassOctaves") == 0);
+
+            bass->setSelectedId (2, juce::sendNotificationSync);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+            for (const auto percent : {75, 100, 125, 150})
+            {
+                scale->setSelectedId (percent, juce::sendNotificationSync);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
+                CHECK (summary->getRight() + 12 <= bassLabel->getX());
+                CHECK (bassLabel->getY() >= bass->getY());
+                CHECK (bassLabel->getBottom() <= bass->getBottom());
+                CHECK (bass->getRight() == 932);
+                CHECK (loop->getRight() <= 932);
+                CHECK (choiceIndex (p, "bassOctaves") == 1);
+                CHECK (p.getLearningRows().size() == 1);
+                CHECK (p.getLearningRows()[0].chord == "C custom");
+                CHECK (p.getLearningRows()[0].formula == "[C5,E4,G4]");
+                CHECK (p.getLearningRows()[0].bass == "C4");
+                CHECK (p.getLearningRows()[0].notes.contains ("C5"));
+                capture ("bass-custom-" + juce::String (percent));
+
+                p.setProgressionText ("[C-1]");
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+                CHECK (! p.getDiagnostics().empty());
+                capture ("bass-invalid-" + juce::String (percent));
+                p.setProgressionText ("[C5,E4,G4]");
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+            }
+
+            scale->setSelectedId (100, juce::sendNotificationSync);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
+            juce::String longFormula = "[";
+            for (int index = 0; index < 128; ++index)
+            {
+                if (index != 0)
+                    longFormula += ",";
+                longFormula += "1";
+            }
+            longFormula += "]";
+            p.setProgressionText (longFormula);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+            CHECK (p.getLearningRows().size() == 1);
+            CHECK (p.getLearningRows()[0].formula == longFormula);
+            capture ("bass-long-formula-100");
+
+            p.setProgressionText ("[C4,C3]");
+            CHECK (p.getLearningRows().size() == 1);
+            CHECK (p.getLearningRows()[0].bass == "C3");
+            CHECK (p.getLearningRows()[0].notes == "C3 C4");
+        }
+    }
+
     // the editor distinguishes unavailable, stopped, and active transport states
     {
         ChordTextAudioProcessor p;

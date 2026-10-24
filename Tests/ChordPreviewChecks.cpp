@@ -1501,6 +1501,62 @@ void checkPreviewBadgePadding()
     }
 }
 
+void checkCustomCardDetailsTooltip()
+{
+    ChordSequenceComponent sequence;
+    sequence.setSize (900, 160);
+    LearningRow row;
+    row.chord = "C custom";
+    row.degree = "custom";
+    for (int index = 0; index < 128; ++index)
+    {
+        if (! row.formula.isEmpty())
+            row.formula += ",";
+        row.formula += "1";
+    }
+    row.notes = "C2 C3 E3 F3 G3";
+    row.bass = "C1";
+    row.durationBeats = 4.0;
+    sequence.setRows ({ row }, -1, false, 1);
+
+    auto* content = sequence.getViewedComponent();
+    CHECK (content != nullptr);
+    if (content == nullptr)
+        return;
+
+    auto* tooltip = dynamic_cast<juce::SettableTooltipClient*> (content);
+    CHECK (tooltip != nullptr);
+    if (tooltip == nullptr)
+        return;
+
+    content->mouseMove (makeMouseEvent (
+        *content, sequence.cardBounds (0).getCentre().toFloat(), {}));
+    const auto text = tooltip->getTooltip();
+    CHECK (text.contains ("C custom"));
+    CHECK (text.contains (row.formula));
+    CHECK (text.contains ("C2 C3 E3 F3 G3"));
+    CHECK (text.contains ("Bass: C1"));
+
+    row.formula = "[C4,C3]";
+    row.bass = "C3";
+    sequence.setRows ({ row }, -1, false, 1);
+    CHECK (tooltip->getTooltip().isEmpty());
+    content->mouseMove (makeMouseEvent (
+        *content, sequence.cardBounds (0).getCentre().toFloat(), {}));
+    CHECK (tooltip->getTooltip().contains ("[C4,C3]"));
+    CHECK (tooltip->getTooltip().contains ("Bass: C3"));
+
+    content->mouseMove (makeMouseEvent (
+        *content, juce::Point<float> (-2.0f, -2.0f), {}));
+    CHECK (tooltip->getTooltip().isEmpty());
+
+    content->mouseMove (makeMouseEvent (
+        *content, sequence.cardBounds (0).getCentre().toFloat(), {}));
+    content->mouseExit (makeMouseEvent (
+        *content, juce::Point<float> (-2.0f, -2.0f), {}));
+    CHECK (tooltip->getTooltip().isEmpty());
+}
+
 void checkPreviewDisplayedRevision()
 {
     const auto file = juce::File::getCurrentWorkingDirectory()
@@ -1824,6 +1880,7 @@ void runChordPreviewChecks()
     checkPreviewCardGestures();
     checkPreviewScaledAndScrolledCards();
     checkPreviewBadgePadding();
+    checkCustomCardDetailsTooltip();
     checkPreviewDisplayedRevision();
     checkPreviewEditorCleanup();
 }
