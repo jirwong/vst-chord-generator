@@ -489,6 +489,81 @@ static void checkPendingTimingExport()
     CHECK (! invalidFile.existsAsFile());
 }
 
+static void checkSequencerTwoRowLayout()
+{
+    ChordTextAudioProcessor processor;
+    processor.setProgressionText ("C, Dm, Em, F, G, Am, Bdim, C");
+    std::unique_ptr<juce::AudioProcessorEditor> editor (createTestEditor (processor));
+    editor->setVisible (true);
+
+    auto* sequence = dynamic_cast<ChordSequenceComponent*> (
+        findEditorChild (*editor, "chordSequence"));
+    auto* content = findEditorChild (*editor, "editorContent");
+    CHECK (sequence != nullptr);
+    CHECK (content != nullptr);
+    if (sequence == nullptr || content == nullptr)
+        return;
+
+    CHECK (editor->getWidth() == 960);
+    CHECK (editor->getHeight() == 750);
+    CHECK (content->getWidth() == 960);
+    CHECK (content->getHeight() == 750);
+    CHECK (sequence->getHeight() == 288);
+    CHECK (sequence->getViewedComponent()->getHeight() == 288);
+    CHECK (sequence->cardBounds (0).getY() == 0);
+    CHECK (sequence->cardBounds (3).getY() == 0);
+    CHECK (sequence->cardBounds (4).getY() == 150);
+    CHECK (sequence->cardBounds (7).getBottom() == 288);
+    CHECK (sequence->getViewArea().contains (sequence->cardBounds (7)));
+
+    auto* clipDrag = findEditorChild (*editor, "clipDrag");
+    CHECK (clipDrag != nullptr);
+    if (clipDrag != nullptr)
+        CHECK (sequence->getBottom() + 8 <= clipDrag->getY());
+
+    const auto snapshotDir = juce::SystemStats::getEnvironmentVariable (
+        "CHORDSCRIPT_UI_SNAPSHOT_DIR", {});
+    if (snapshotDir.isNotEmpty())
+    {
+        const juce::File directory (snapshotDir);
+        CHECK (directory.createDirectory().wasOk());
+        juce::FileOutputStream output (directory.getChildFile ("two-rows.png"));
+        CHECK (output.openedOk());
+        output.setPosition (0);
+        output.truncate();
+        CHECK (juce::PNGImageFormat().writeImageToStream (
+            editor->createComponentSnapshot (editor->getLocalBounds()), output));
+    }
+
+    // A ninth chord adds a third row; it scrolls into view rather than resizing
+    // the two visible rows.
+    processor.setProgressionText ("C, Dm, Em, F, G, Am, Bdim, C, F");
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (40);
+    CHECK (sequence->getViewedComponent()->getHeight() == 438);
+    CHECK (sequence->getHeight() == 288);
+    CHECK (! sequence->getViewArea().contains (sequence->cardBounds (8)));
+    sequence->setViewPosition (0, 150);
+    CHECK (sequence->getViewPositionY() == 150);
+    CHECK (sequence->getViewArea().contains (sequence->cardBounds (8)));
+
+    auto* selector = dynamic_cast<juce::ComboBox*> (
+        findEditorChild (*editor, "uiScaleBox"));
+    CHECK (selector != nullptr);
+    if (selector == nullptr)
+        return;
+
+    const int percentages[] {75, 100, 125, 150};
+    const int heights[] {563, 750, 938, 1125};
+    for (int index = 0; index < 4; ++index)
+    {
+        selector->setSelectedId (percentages[index], juce::sendNotificationSync);
+        CHECK (editor->getHeight() == heights[index]);
+        CHECK (content->getHeight() == 750);
+        CHECK (sequence->getHeight() == 288);
+        CHECK (sequence->getViewArea().contains (sequence->cardBounds (8)));
+    }
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
@@ -496,6 +571,7 @@ int main()
     checkDefaultLengthStateAndHostTiming();
     checkLiveLengthResynchronization();
     checkPendingTimingExport();
+    checkSequencerTwoRowLayout();
 
     // UI preferences are validated and shared through a local file, not project state.
     {
@@ -601,14 +677,14 @@ int main()
             CHECK (selector->getText() == "100%");
             const int percentages[] {75, 100, 125, 150};
             const int widths[] {720, 960, 1200, 1440};
-            const int heights[] {488, 650, 813, 975};
+            const int heights[] {563, 750, 938, 1125};
             for (int index = 0; index < 4; ++index)
             {
                 selector->setSelectedItemIndex (index, juce::sendNotificationSync);
                 const auto factor = static_cast<float> (percentages[index]) / 100.0f;
                 CHECK (editor.getWidth() == widths[index]);
                 CHECK (editor.getHeight() == heights[index]);
-                CHECK (content->getWidth() == 960 && content->getHeight() == 650);
+                CHECK (content->getWidth() == 960 && content->getHeight() == 750);
                 CHECK_NEAR (content->getTransform().mat00, factor, 0.001f);
                 CHECK (UiSettings (file).loadUiScalePercent() == percentages[index]);
                 const auto selectorArea = editor.getLocalArea (selector, selector->getLocalBounds());
@@ -698,7 +774,7 @@ int main()
             juce::MemoryBlock before, after;
             firstProcessor.getStateInformation (before);
             selector->setSelectedId (125, juce::sendNotificationSync);
-            CHECK (first.getWidth() == 1200 && first.getHeight() == 813);
+            CHECK (first.getWidth() == 1200 && first.getHeight() == 938);
             CHECK (second->getWidth() == 960 && otherSelector->getSelectedId() == 100);
             firstProcessor.getStateInformation (after);
             CHECK (before == after);
@@ -715,7 +791,7 @@ int main()
             CHECK (first.getWidth() == 1200 && second->getWidth() == 1200);
             second.reset();
             second = std::make_unique<ChordTextAudioProcessorEditor> (secondProcessor, UiSettings (file));
-            CHECK (second->getWidth() == 720 && second->getHeight() == 488);
+            CHECK (second->getWidth() == 720 && second->getHeight() == 563);
         }
     }
 
@@ -733,7 +809,7 @@ int main()
         auto* clip = dynamic_cast<ClipDragComponent*> (findEditorChild (editor, "clipDrag"));
         clip->onStatus ("Export failed: " + juce::String::repeatedString ("long-folder-name/", 100));
         selector->setSelectedId (150, juce::sendNotificationSync);
-        CHECK (editor.getWidth() == 1440 && editor.getHeight() == 975);
+        CHECK (editor.getWidth() == 1440 && editor.getHeight() == 1125);
         auto* status = dynamic_cast<juce::Label*> (findEditorChild (editor, "footerStatus"));
         CHECK (status->getText().contains ("UI scale was not saved"));
         CHECK (status->getText().indexOf ("UI scale was not saved")
@@ -1749,7 +1825,7 @@ int main()
         if (editor != nullptr)
         {
             CHECK (editor->getWidth() == 960);
-            CHECK (editor->getHeight() == 650);
+            CHECK (editor->getHeight() == 750);
         }
     }
 
@@ -1773,7 +1849,7 @@ int main()
         std::unique_ptr<juce::AudioProcessorEditor> editor (createTestEditor (p));
         CHECK (editor != nullptr);
         CHECK (editor->getWidth() == 960);
-        CHECK (editor->getHeight() == 650);
+        CHECK (editor->getHeight() == 750);
 
         auto* progression = dynamic_cast<juce::TextEditor*> (
             findEditorChild (*editor, "progressionEditor"));

@@ -8,11 +8,14 @@
 namespace
 {
 constexpr int editorWidth = 960;
-constexpr int editorHeight = 650;
+constexpr int editorHeight = 750;
 constexpr int timerFrequencyHz = 30;
 constexpr double debounceMilliseconds = 150.0;
 constexpr int sequenceCardHeight = 138;
 constexpr int sequenceCardGap = 12;
+constexpr int visibleSequenceRows = 2;
+constexpr int desiredSequenceHeight = visibleSequenceRows * sequenceCardHeight
+                                      + (visibleSequenceRows - 1) * sequenceCardGap;
 constexpr int minimumCardWidth = 190;
 
 const auto backgroundColour = juce::Colour (0xff121718);
@@ -840,7 +843,6 @@ void ChordTextAudioProcessorEditor::layoutContent()
     constexpr int sequenceHeaderHeight = 40;
     constexpr int actionRowHeight = 44;
     constexpr int actionGap = 8;
-    constexpr int desiredSequenceHeight = 160;
     const auto sequenceHeight = std::min (desiredSequenceHeight,
         std::max (1, content.getHeight() - sequenceHeaderHeight - actionRowHeight - actionGap));
     const auto flexibleSequenceGap = std::max (0, content.getHeight() - sequenceHeaderHeight
@@ -855,7 +857,7 @@ void ChordTextAudioProcessorEditor::layoutContent()
     previewHintLabel.setBounds (sequenceHeader.removeFromLeft (330).reduced (0, 2));
 
     sequenceView.setBounds (content.removeFromTop (sequenceHeight));
-    content.removeFromBottom (actionGap);
+    content.removeFromTop (actionGap);
 
     auto actionRow = content.removeFromBottom (actionRowHeight);
     revealClipButton.setBounds (actionRow.removeFromRight (156));
