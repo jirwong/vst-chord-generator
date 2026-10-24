@@ -1,6 +1,7 @@
 #include "Check.h"
 #include "Theory/Chord.h"
 #include "Theory/ChordSymbolParser.h"
+#include "Theory/CustomChordParser.h"
 #include "Theory/Key.h"
 #include "Theory/NumericDegreeParser.h"
 #include "Theory/MidiFileWriter.h"
@@ -98,8 +99,156 @@ static bool containsBytes (const std::vector<std::uint8_t>& bytes,
         != bytes.end();
 }
 
+static void checkCustomChordParsing()
+{
+    const Key cMajor {{'C', 0}, Mode::major};
+    const auto list = parseCustomChord ("[1,2,4,5]", cMajor, 0);
+    CHECK (list.spec.has_value());
+    if (list.spec && list.spec->customNotes)
+    {
+        CHECK (list.spec->root.name() == "C");
+        CHECK (list.spec->customNotes->size() == 4);
+        CHECK ((*list.spec->customNotes)[0].pitchClass.name() == "C");
+        CHECK ((*list.spec->customNotes)[1].pitchClass.name() == "D");
+        CHECK ((*list.spec->customNotes)[2].pitchClass.name() == "F");
+        CHECK ((*list.spec->customNotes)[3].pitchClass.name() == "G");
+        const Chord chord (*list.spec);
+        CHECK (chord.symbol() == "C custom");
+        CHECK (chord.tones().size() == 4);
+        CHECK (chord.tones()[1].name() == "D");
+        CHECK (chord.tones()[2].name() == "F");
+        CHECK (chord.tones()[3].name() == "G");
+    }
+    else
+    {
+        CHECK (false);
+    }
+
+    const auto mixed = parseCustomChord ("[F3,1,3,5]", cMajor, 8);
+    CHECK (mixed.spec.has_value());
+    if (mixed.spec && mixed.spec->customNotes)
+    {
+        CHECK (mixed.spec->root.name() == "F");
+        CHECK ((*mixed.spec->customNotes)[0].exactMidi == std::optional<int> {53});
+    }
+    else
+    {
+        CHECK (false);
+    }
+
+    const auto offsets = parseCustomChord ("[1@-1,1,8,14,F@+1]", cMajor, 0);
+    CHECK (offsets.spec && offsets.spec->customNotes);
+    if (offsets.spec && offsets.spec->customNotes)
+    {
+        const std::vector<int> expected {-1, 0, 1, 1, 1};
+        CHECK (offsets.spec->customNotes->size() == expected.size());
+        for (std::size_t index = 0; index < expected.size(); ++index)
+            CHECK ((*offsets.spec->customNotes)[index].octaveOffset == expected[index]);
+    }
+
+    const auto exactB = parseCustomChord ("[B3]", cMajor, 0);
+    const auto flatThird = parseCustomChord ("[b3]", cMajor, 0);
+    const auto enharmonics = parseCustomChord ("[B#3,Cb4]", cMajor, 0);
+    CHECK (exactB.spec && exactB.spec->customNotes
+           && (*exactB.spec->customNotes)[0].exactMidi == std::optional<int> {59});
+    CHECK (flatThird.spec && flatThird.spec->customNotes
+           && (*flatThird.spec->customNotes)[0].pitchClass.name() == "Eb");
+    CHECK (enharmonics.spec && enharmonics.spec->customNotes
+           && (*enharmonics.spec->customNotes)[0].exactMidi == std::optional<int> {60}
+           && (*enharmonics.spec->customNotes)[1].exactMidi == std::optional<int> {59});
+    CHECK (voicedNoteName ({'B', 1}, 60) == "B#3");
+    CHECK (voicedNoteName ({'C', -1}, 59) == "Cb4");
+    CHECK (voicedNoteName ({'C', 0}, 0) == "C-1");
+
+    const auto cMajorMixed = parseCustomChord ("[1,3,5,F]", cMajor, 0);
+    const auto dMajorMixed = parseCustomChord ("[1,3,5,F]", Key {{'D', 0}, Mode::major}, 0);
+    CHECK (cMajorMixed.spec && cMajorMixed.spec->customNotes
+           && dMajorMixed.spec && dMajorMixed.spec->customNotes
+           && (*cMajorMixed.spec->customNotes)[3].pitchClass.name() == "F"
+           && (*dMajorMixed.spec->customNotes)[3].pitchClass.name() == "F");
+
+    for (const auto mode : allModes())
+    {
+        const Key key {{'D', 0}, mode};
+        const auto scale = parseCustomChord ("[1,2,3,4,5,6,7]", key, 0);
+        CHECK (scale.spec && scale.spec->customNotes);
+        if (scale.spec && scale.spec->customNotes)
+            for (int degree = 1; degree <= 7; ++degree)
+                CHECK ((*scale.spec->customNotes)[static_cast<std::size_t> (degree - 1)]
+                           .pitchClass.name() == key.degree (degree).name());
+
+        const auto accidentals = parseCustomChord ("[b3,#4]", key, 0);
+        CHECK (accidentals.spec && accidentals.spec->customNotes
+               && (*accidentals.spec->customNotes)[0].pitchClass.semitone()
+                      == key.degree (3).semitone() - 1
+               && (*accidentals.spec->customNotes)[1].pitchClass.semitone()
+                      == key.degree (4).semitone() + 1);
+    }
+
+    const Key cMinor {{'C', 0}, Mode::minor};
+    const auto loweredMinorThird = parseCustomChord ("[b3]", cMinor, 0);
+    CHECK (loweredMinorThird.spec && loweredMinorThird.spec->customNotes
+           && (*loweredMinorThird.spec->customNotes)[0].pitchClass.semitone() == 2
+           && (*loweredMinorThird.spec->customNotes)[0].pitchClass.name() == "Ebb");
+}
+
+static void checkCustomGrammarDiagnostics()
+{
+    const Key cMajor {{'C', 0}, Mode::major};
+    const auto mixed = parseProgression ("C, [C-1, 1@-1, F#4]:2 | V", cMajor);
+    CHECK (mixed.progression.has_value());
+    if (mixed.progression)
+    {
+        CHECK (mixed.progression->steps.size() == 3);
+        CHECK (mixed.progression->steps[1].durationBeats == 2.0);
+        CHECK (mixed.progression->totalBeats() == 10.0);
+    }
+
+    for (const auto invalid : {"[]", "[1,]", "[1,,5]", "[1 3]", "[1,3", "[1,[3]]",
+                               "[1@0]", "[8@-1]", "[F3@+1]", "[f#]", "[F##]",
+                               "[C-1]junk", "[0]", "[15]"})
+    {
+        const auto result = parseProgression (invalid, cMajor);
+        CHECK (! result.progression);
+        CHECK (! result.diagnostics.empty());
+    }
+
+    std::string maximum = "[1";
+    for (int entry = 1; entry < 128; ++entry)
+        maximum += ",1";
+    maximum += ']';
+    CHECK (parseProgression (maximum, cMajor).progression.has_value());
+
+    std::string tooMany = "[1";
+    for (int entry = 1; entry < 129; ++entry)
+        tooMany += ",1";
+    tooMany += ']';
+    CHECK (! parseProgression (tooMany, cMajor).progression);
+
+    CHECK (! parseProgression ("1645", cMajor).progression);
+
+    const auto emptyEntry = parseProgression ("C, [1,,5]", cMajor);
+    CHECK (! emptyEntry.progression && ! emptyEntry.diagnostics.empty());
+    if (! emptyEntry.diagnostics.empty())
+        CHECK (emptyEntry.diagnostics.front().offset == 6);
+
+    const auto exactLow = parseCustomChord ("[C-1,B-1]", cMajor, 0);
+    const auto exactHigh = parseCustomChord ("[G9]", cMajor, 0);
+    const auto belowMidi = parseCustomChord ("[Cb-1]", cMajor, 0);
+    const auto aboveMidi = parseCustomChord ("[A9]", cMajor, 0);
+    CHECK (exactLow.spec && exactLow.spec->customNotes
+           && (*exactLow.spec->customNotes)[0].exactMidi == std::optional<int> {0}
+           && (*exactLow.spec->customNotes)[1].exactMidi == std::optional<int> {11});
+    CHECK (exactHigh.spec && exactHigh.spec->customNotes
+           && (*exactHigh.spec->customNotes)[0].exactMidi == std::optional<int> {127});
+    CHECK (! belowMidi.spec && ! belowMidi.diagnostics.empty());
+    CHECK (! aboveMidi.spec && ! aboveMidi.diagnostics.empty());
+}
+
 int main()
 {
+    checkCustomChordParsing();
+    checkCustomGrammarDiagnostics();
     CHECK (static_cast<int> (Mode::major) == 0);
     CHECK (static_cast<int> (Mode::minor) == 1);
     CHECK (allModes().size() == 9);
