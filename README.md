@@ -7,7 +7,7 @@ The plugin plays it in sync with the host transport, or
 exports it as a Standard MIDI File. You can also drag one loop from the editor into
 a DAW such as Bitwig as a MIDI clip. The editor shows chord cards. Each card
 shows the functional degree or custom formula, the voiced chord tones, an optional
-root bass note, and the duration of each chord in beats.
+root bass note, and the written length plus resolved beat count for each chord.
 
 The plugin produces MIDI only. It has no audio output and no built-in synth. You
 must route it to an instrument in the host.
@@ -139,16 +139,16 @@ in the manual checklist below. It has **not** been verified in this environment.
 ## Quick start
 
 1. Load Chord Text in a channel and route it to an instrument.
-2. Press Play in the DAW. The default progression `Cmaj7, Am7, Dm7, G7` plays one
-   chord per 4/4 bar and loops.
+2. Press Play in the DAW. The default progression `Cmaj7, Am7, Dm7, G7` plays four
+   beats per chord and loops.
 3. Type a progression in the text box. The plugin parses the text 150 ms after your
    last edit, so playback updates soon after you stop typing. Press **Regenerate**
    to apply the current text immediately.
-4. Use the key, mode, voicing, range, velocity, and loop controls to shape the
-   output.
+4. Use the key, mode, voicing, range, velocity, default length, bass, and loop
+   controls to shape the output.
 5. Left-press a chord card to hear it, or right-click to hold it. Release the left
    button or right-click the held card again to stop.
-6. Read the chord cards for the degree, spelled notes, and duration of each
+6. Read the chord cards for the degree, spelled notes, and length of each
    chord, then drag the clip preview into the DAW or export a `.mid` file.
 
 Live generation needs host playhead data with a PPQ position and tempo. The status
@@ -163,9 +163,25 @@ With no usable position, the plugin generates no notes and does not free-run.
 Manual chord preview is the exception: it can sound while the transport is stopped
 or no playhead is available, as long as the host keeps processing the plugin.
 
+### Musical lengths and host meter
+
+Use **DEFAULT LENGTH** to choose the length of chord tokens without a suffix. It is
+saved with the project and starts at 4 beats. Write an explicit suffix when a step
+needs a different length, for example `C:1/8D, Dm:2beats, G:1bar`.
+
+One internal beat is one quarter note in every meter. A bar length follows the
+current DAW time signature: one bar is three beats in 6/8 and four beats in 4/4.
+The sequence status shows the current host meter, or `4/4 fallback` when the host
+does not supply one. A meter change rebuilds bar-based lengths for the current song
+position. Note values and explicit beat values keep their duration.
+
+The cards show the written or inherited length and resolved beats. **DEFAULT** means
+the step inherits DEFAULT LENGTH. Full syntax, including dotted, triplet, beat, and
+bar forms, is in [SYNTAX.md](SYNTAX.md#2-musical-lengths).
+
 The progression is anchored to song position 0. If you start playback or seek into
 the middle of a chord, the plugin plays that chord from the start of the block. The
-progression loops with a length equal to the sum of the chord durations. Loop is on
+progression loops with a length equal to the sum of the chord lengths. Loop is on
 by default; with loop off, the progression plays once. The plugin releases active
 notes before it emits new notes after a stop, a seek, a bypass, a plan change, or a
 loop wrap. When the host calls `prepareToPlay` again, the plugin queues the sounding
@@ -191,7 +207,7 @@ add a synth.
 - Pressing the sounding card again releases and retriggers it, even when the pitches
   are identical.
 - Preview uses the card's generated pitches, channel 1, and the current velocity.
-  The card's beat duration does not limit preview.
+  The card's resolved length does not limit preview.
 - During playback, manual preview replaces the progression's output while the host
   timeline keeps moving. When preview ends, normal output resumes at the current
   host position; it does not restart the progression. Releasing exactly on a chord
@@ -222,22 +238,22 @@ highlighting is suppressed while a manual preview is sounding.
 
 **Regenerate** is on the progression header row. When you click it, the plugin
 cancels any pending debounce, parses the text in the editor immediately, and
-rebuilds the playback plan and learning table from the current text and settings. It
+rebuilds the playback plan and chord cards from the current text and settings. It
 rebuilds the plan even if the text did not change.
 
 Automatic parsing stays on: the plugin parses the text 150 ms after your last edit.
 Regenerate is an explicit alternative to waiting for that timer, not a replacement
 for it.
 
-If the text is not valid, Regenerate does not replace the last valid plan or table
-rows. The current progression keeps playing and the diagnostics area shows the
-errors. An empty progression is valid; Regenerate then makes an empty table and
+If the text is not valid, Regenerate does not replace the last valid plan or chord
+cards. The current progression keeps playing and the diagnostics area shows the
+errors. An empty progression is valid; Regenerate then clears the cards and
 disables export and dragging.
 
 ## Syntax reference
 
 The full, canonical syntax guide is [SYNTAX.md](SYNTAX.md). It covers
-progressions and separators, durations, absolute chords and aliases,
+progressions and separators, musical lengths, absolute chords and aliases,
 alterations, slash bass, Roman numerals, custom note lists, added root bass, keys,
 grammar, diagnostics, and common mistakes.
 
@@ -246,16 +262,16 @@ Quick examples:
 ```text
 Cmaj7, Am7, Dm7, G7
 i-iv-V
-C:8, Am7:4, F:4, G:4
+C:1/8D, Am7:2beats, F:1bar, G:1/8T
 C/E, F#m7b5/C
 1, 6, 4, 5
-1(7), 2(7), 5(7):8
+1(7), 2(7), 5(7):1/8T
 [1,2,4,5]
 1, [1,3,5,F]:2, 6, 5
 ```
 
-Every chord lasts 4 beats by default. Separators can be mixed. You can use absolute
-chords and Roman numerals in the same progression. The plugin editor and
+Every chord uses DEFAULT LENGTH when it has no suffix. Separators can be mixed. You
+can use absolute chords and Roman numerals in the same progression. The plugin editor and
 `chordtext-cli` share the parser and pitch resolver, so the same text and settings
 produce the same notes in both.
 To check syntax without a DAW, run `chordtext-cli "C, H"`.
@@ -285,22 +301,13 @@ always uses its ascending form. The scale summary shows the current tonic and
 seven scale notes. See [numeric syntax](SYNTAX.md#52-numeric-scale-chords) and
 [quality overrides](SYNTAX.md#53-explicit-numeric-chord-quality) for examples.
 
-### The learning table
+### Chord cards
 
-The table shows the last valid progression:
-
-| Chord | Degree | Notes | Beats |
-|---|---|---|---|
-| Cmaj7 | Imaj7 | C E G B | 4 |
-| Am7 | vi7 | A C E G | 4 |
-| Dm7 | ii7 | D F A C | 4 |
-| G7 | V7 | G B D F | 4 |
-
-The Beats column is the chord's effective duration. It includes the default of 4
-beats when the input has no `:N` suffix. It shows a compact number, so a chord
-written as `Am7:1.5` shows `1.5`, not `1.5 beats`. The Notes column follows the
-current voicing and range. It uses each chord's spelled tones, so Roman numerals
-inherit the key's spelling. The Degree column is a normalized functional label.
+The cards show the last valid progression. Each card shows the chord, degree or
+custom formula, notes, optional bass note, written or selected length, and resolved
+beat count. A card has **DEFAULT** only when that step inherits DEFAULT LENGTH.
+The Notes line follows the current voicing and range. It uses each chord's spelled
+tones, so Roman numerals inherit the key's spelling. The Degree line is a normalized functional label.
 Absolute chords are labeled best-effort relative to the selected key, using the root
 letter and accidental (not the nearest pitch class). Chromatic or ambiguous roots use
 a best-effort `b`/`#` label. The plugin highlights the card for the currently playing
@@ -333,6 +340,7 @@ examples.
 | Voicing | Voice-led | Voice-led or Root position |
 | Range | C3–C6 | C2–C5, C3–C6, or C4–C7 |
 | Velocity | 100 | 1–127 |
+| Default Length | 4 beats | Used by chord tokens without an explicit suffix; 19 musical choices |
 | Loop | On | On or off |
 | Bass | Off | Add the chord's voiced root 1, 2, or 3 octaves lower |
 | Chord preview | — | Left-press to preview, release to stop; right-click to hold, right-click again to release |
@@ -353,10 +361,11 @@ Custom lists can request different octaves, and the optional root bass can add a
 lower root. Identical final MIDI pitches sound once.
 
 The project state saves the progression text, key, mode, voicing, range, velocity,
-loop, and bass octave setting. It uses stable parameter IDs (`key`, `mode`,
-`voicing`, `range`, `velocity`, `loop`, `scaleMode`, `bassOctaves`) plus the
+default length, loop, and bass octave setting. It uses stable parameter IDs (`key`, `mode`,
+`voicing`, `range`, `velocity`, `loop`, `scaleMode`, `bassOctaves`, `defaultLength`) plus the
 `progressionText` property. Restoring a project rebuilds the plan but does not start
 playback. Hosts must restore state on the message thread.
+Projects saved before Default Length existed restore a four-beat default.
 If a host restores state on another thread, the plugin defers the plan rebuild to the
 message queue.
 
@@ -393,12 +402,12 @@ User zoom combines with the DAW's display scaling. It does not change Windows fi
 
 Click **Export MIDI** to write one complete loop of the current progression. Export
 is separate from dragging. Unlike a drag file, an exported file always includes the
-tempo and 4/4 time-signature metadata. The writer uses the same render plan as live
+tempo and effective time-signature metadata. The writer uses the same render plan as live
 playback:
 
 - the last host tempo observed during processing, or 120 BPM before any tempo has
   been observed;
-- 4/4 time signature;
+- the current host time signature, or the 4/4 fallback;
 - track name `Chord Text`;
 - 960 ticks per quarter note;
 - deterministic event order with note-offs before note-ons at the same tick;
@@ -415,12 +424,12 @@ appends `.mid` if the chosen filename lacks it. The status line reports the file
 or the failure reason.
 
 Export retains the tempo event (the last observed host tempo, or 120 BPM) and the
-4/4 time signature. Only the drag path omits them.
+effective time signature. Only the drag path omits them.
 
 ## Dragging clips into a DAW
 
 The editor contains a clip-shaped **Drag to DAW** preview. It shows the loop length
-as the sum of the chord durations, for example `16 beats · 4 bars (4/4)`. A
+as the sum of the resolved chord lengths, for example `3 beats · 1 bar (6/8)`. A
 left-button drag starts only after a small mouse movement. A click therefore does not
 create a file.
 
@@ -504,16 +513,17 @@ One-shot:
 ```bash
 ./build/Cli/chordtext-cli.exe --key A --mode minor "i-iv-V"
 ./build/Cli/chordtext-cli.exe --key C --mode major --bass 1 "1, [1,3,5,F]:2, 6, 5"
+./build/Cli/chordtext-cli.exe --default-length 1/8D --time-signature 6/8 "1, 4, 5:1bar"
 ```
 
 ```text
 Progression: i-iv-V
-Key: A minor · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off
+Key: A minor · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off · Default length: 4beats · Time signature: 4/4
 
-Chord  Degree  Notes   Beats  MIDI
-Am     i       A C E   4      57 60 64
-Dm     iv      A D F   4      57 62 65
-E      V       G# B E  4      56 59 64
+Chord  Degree  Notes   Length  Beats  MIDI
+Am     i       A C E   4beats  4      57 60 64
+Dm     iv      A D F   4beats  4      57 62 65
+E      V       G# B E  4beats  4      56 59 64
 ```
 
 Piped stdin:
@@ -524,7 +534,7 @@ echo "C, H, C99" | ./build/Cli/chordtext-cli.exe
 
 ```text
 Progression: C, H, C99
-Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off
+Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off · Default length: 4beats · Time signature: 4/4
 
 2 errors:
 Error at character 3: unknown chord root (H)
@@ -538,16 +548,16 @@ prints the current settings, and the prompt is `chord> `. A session looks like:
 
 ```text
 Chord Text CLI — :help for commands
-Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off
+Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off · Default length: 4beats · Time signature: 4/4
 
 chord> Cmaj7
 Progression: Cmaj7
-Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off
+Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off · Default length: 4beats · Time signature: 4/4
 
-Chord  Degree  Notes    Beats  MIDI
-Cmaj7  Imaj7   C E G B  4      48 52 55 59
+Chord  Degree  Notes    Length  Beats  MIDI
+Cmaj7  Imaj7   C E G B  4beats  4      48 52 55 59
 chord> :key A
-Key: A major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off
+Key: A major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off · Default length: 4beats · Time signature: 4/4
 chord> :quit
 ```
 
@@ -563,13 +573,16 @@ The full command list is under [REPL](#repl).
 | `--range <C2-C5\|C3-C6\|C4-C7>` | case-insensitive | `C3-C6` |
 | `--velocity <1-127>` | integer | `100` |
 | `--bpm <4-999>` | finite number in range | `120` |
+| `--default-length <length>` | Any valid musical length | `4beats` |
+| `--time-signature <N/D>` | Numerator 1–255; denominator 1, 2, 4, 8, 16, 32, or 64 | `4/4` |
 | `--bass <off\|1\|2\|3>` | Add the voiced chord root 1, 2, or 3 octaves down | `off` |
 | `--json` | flag | off |
 | `--out <path>` | file path | off |
 | `--help` | flag | — |
 
-Defaults are the plugin's defaults. `--bpm` only affects a written MIDI file. It is
-reported in JSON, but it has no effect on the table. Options accept both
+`--default-length` accepts the same grammar as a progression suffix. `--time-signature`
+resolves `bar` lengths and sets metadata in an exported file. `--bpm` only affects a
+written MIDI file. It is reported in JSON, but it has no effect on the table. Options accept both
 `--name value` and `--name=value`. Boolean flags are the exception: they reject an
 attached value. If an option is repeated, the last occurrence wins. Unknown options,
 missing values, and invalid values are usage errors.
@@ -582,22 +595,22 @@ for empty text.
 
 ```text
 Progression: Cmaj7, Am7, Dm7, G7
-Key: C major · Voicing: root-position · Range: C2-C5 · Velocity: 100 · Bass: Off
+Key: C major · Voicing: root-position · Range: C2-C5 · Velocity: 100 · Bass: Off · Default length: 4beats · Time signature: 4/4
 
-Chord  Degree  Notes    Beats  MIDI
-Cmaj7  Imaj7   C E G B  4      36 40 43 47
-Am7    vi7     A C E G  4      45 48 52 55
-Dm7    ii7     D F A C  4      38 41 45 48
-G7     V7      G B D F  4      43 47 50 53
+Chord  Degree  Notes    Length  Beats  MIDI
+Cmaj7  Imaj7   C E G B  4beats  4      36 40 43 47
+Am7    vi7     A C E G  4beats  4      45 48 52 55
+Dm7    ii7     D F A C  4beats  4      38 41 45 48
+G7     V7      G B D F  4beats  4      43 47 50 53
 ```
 
 Columns are left-aligned with two spaces between them. The `Notes` column follows
-the current voicing and matches the plugin's learning table. An inversion therefore
+the current voicing and matches the plugin's chord cards. An inversion therefore
 appears in voicing order. A custom chord's notes include octave names. The `MIDI`
 column lists all final pitches, including an added bass. When bass is enabled, the
 `Bass` column shows its octave-aware note name. The column is not shown when bass is
-Off. `Beats` uses compact formatting: integral values omit the decimal point (for
-example `4`, `1.5`). An empty progression is valid and prints
+Off. `Length` is the canonical suffix or selected default. `Beats` is the resolved
+quarter-note duration and uses compact formatting. An empty progression is valid and prints
 `Empty progression (no chords).`.
 
 Diagnostics replace the table and use the editor's exact wording, one error per line
@@ -644,6 +657,8 @@ settings. The REPL ignores a blank line. A parse error does not exit the REPL.
 | `:range <C2-C5\|C3-C6\|C4-C7>` | Set the pitch range |
 | `:velocity <1-127>` | Set the velocity |
 | `:bpm <4-999>` | Set the MIDI tempo |
+| `:default-length <length>` | Set the inherited chord length |
+| `:time-signature <N/D>` | Set the meter used by bar lengths and MIDI export |
 | `:bass <off\|1\|2\|3>` | Add the voiced chord root 1, 2, or 3 octaves down |
 | `:json <on\|off>` | Switch report formatting between human and JSON |
 | `:export <path>` | Write the last successfully parsed progression with the current settings |
@@ -672,7 +687,9 @@ newline:
     "range": "C2-C5",
     "velocity": 100,
     "bpm": 120,
-    "bassOctaves": 0
+    "bassOctaves": 0,
+    "defaultLength": "4beats",
+    "timeSignature": {"numerator": 4, "denominator": 4}
   },
   "valid": true,
   "diagnostics": [],
@@ -687,7 +704,9 @@ newline:
       "bassMidi": null,
       "bassNote": null,
       "startBeat": 0,
-      "durationBeats": 4
+      "durationBeats": 4,
+      "lengthExpression": "4beats",
+      "usesDefaultLength": true
     }
   ],
   "midiFile": null,
@@ -703,7 +722,8 @@ Field meanings:
 
 - `settings` holds the effective settings as canonical values (`key` as written in
   the option list, `mode` as a mode name, `voicing` as `voice-led`/`root-position`,
-  `range` as `C2-C5`/`C3-C6`/`C4-C7`, and `bassOctaves` from 0 to 3).
+  `range` as `C2-C5`/`C3-C6`/`C4-C7`, `bassOctaves` from 0 to 3, plus canonical
+  `defaultLength` and `timeSignature` values).
 - `valid` is false when parse or pitch-resolution diagnostics are present. Then
   `chords` is empty and `diagnostics` is populated with `offset`, `token`, and
   `message` entries. An empty
@@ -716,6 +736,9 @@ Field meanings:
 - `bassMidi` and `bassNote` identify the added bass, or are `null` when bass is Off.
   `bassNote` includes its octave.
 - `startBeat` is cumulative across chords.
+- `durationBeats` is the resolved quarter-note duration.
+- `lengthExpression` is the canonical written suffix or selected default.
+  `usesDefaultLength` identifies inherited rows.
 - `midiFile` is an absolute path string after a successful write, otherwise `null`.
 - `error` is a string for a file I/O or empty-export failure, otherwise `null`.
 
@@ -728,7 +751,7 @@ human-readable on stderr.
 
 `--out <path>` (one-shot or piped mode) and `:export <path>` (REPL) write one loop
 of the current progression as a Standard MIDI File. They use the same shared writer
-as the plugin's export: 4/4 time signature, tempo from `--bpm` (default 120), track
+as the plugin's export: the selected `--time-signature` (default 4/4), tempo from `--bpm` (default 120), track
 name `Chord Text`, 960 ticks per quarter note, channel 1, and note-offs before
 note-ons at equal ticks. `--out` requires a progression argument or piped input.
 Using it to start an interactive REPL is a usage error — use `:export` there.
@@ -740,6 +763,10 @@ report the absolute path. `:export` re-parses the last valid text with the curre
 settings, so the written file always matches what a report would show now. Writing to
 an empty progression fails with exit code 2 in one-shot mode. The error goes to
 stderr (or the JSON `error` field), and the tool prints no `Wrote` line.
+
+The writer rejects a positive musical length if it cannot represent it safely as at
+least one MIDI tick at 960 ticks per quarter note, or if the file timing is outside
+the Standard MIDI File limits. This does not change parsing or live preview.
 
 ### Windows and UTF-8
 
@@ -754,8 +781,8 @@ user-supplied paths. All numeric formatting and parsing uses the classic locale.
 `Tests/TheoryTest.cpp` is plain C++ with no JUCE dependency and covers parsing,
 spelling, keys, voicing, and the render plan. `Tests/ProcessorTest.cpp` is a JUCE
 console application covering transport behaviour, note lifecycle, parameters, state
-round-trip, custom chord and bass output, the editor, Regenerate, card tooltips, the
-Beats column, the drag-file writer and its two modes, and MIDI export/read-back.
+round-trip, custom chord and bass output, the editor, Regenerate, card tooltips and
+timing labels, the drag-file writer and its two modes, and MIDI export/read-back.
 `Tests/ChordPreviewChecks.cpp` is called from
 that suite and covers the preview exchange, processor arbitration and resynchronisation,
 cancellation and lifecycle, independent instances, state/file invariance, card hit
@@ -782,8 +809,8 @@ Or run the already-built executables directly:
 ./build/Tests/CliTests.exe
 ```
 
-Recent runs printed `753 checks, 0 failures` for `TheoryTests`, `14938 checks, 0
-failures` for `ProcessorTests`, and `319 checks, 0 failures` for `CliTests`. The
+Recent runs printed `924 checks, 0 failures` for `TheoryTests`, `16148 checks, 0
+failures` for `ProcessorTests`, and `366 checks, 0 failures` for `CliTests`. The
 processor count varies because one preview stress check records how many coalesced
 publications the reader observed. Each executable returns a non-zero exit code if any
 check fails. The build scripts stop on the first failing suite. The build must
@@ -838,11 +865,11 @@ Known limitations in v1:
 - There is no native Bitwig clip-creation API for a VST3 plugin. Chord Text writes
   a `.mid` file and starts an OS drag. It does not create or edit a Bitwig clip
   directly.
-- The preview's bar count assumes 4/4 and is informational. The clip itself is
-  beat-based, so a host in another meter can still use it.
+- The drag subtitle uses the current effective meter for its bar count. The drag
+  file remains beat-based and deliberately has no tempo or time-signature events.
 - The editor uses a 960×650 base layout with four UI scales from 75% to 150%. The
-  BASS menu sits beside the scale summary. Actual host window resizing and mixed-DPI
-  display behavior still require DAW checks.
+  DEFAULT LENGTH and BASS menus sit beside the scale summary. Actual host window
+  resizing and mixed-DPI display behavior still require DAW checks.
 - Host state restore is assumed to run on the message thread. If a host calls
   `setStateInformation` on another thread, the plugin defers the plan rebuild to the
   message queue. The host is still responsible for serialising state changes.
@@ -874,7 +901,7 @@ Explicitly out of scope for v1:
 ## Manual DAW verification checklist
 
 Automated tests cover parsing, voicing, transport, note lifecycle, state, MIDI
-export, Regenerate, the Beats column, the drag-file writer, and the clip-preview
+export, Regenerate, card timing labels, the drag-file writer, and the clip-preview
 state. The following host checks require a VST3-compatible DAW and a human at the
 keyboard. They are documented here, but they were **not** performed as part of this
 repository's automated verification. They therefore remain unverified until someone
@@ -909,7 +936,13 @@ runs them.
       once, with no duplicate note-ons or restart.
 - [ ] Change the text to `C, Cmaj7, Dmaj7, Emin9, Fmaj7` and confirm the notes.
 - [ ] Change to `i-iv-V` in A minor and confirm Am, Dm, E.
-- [ ] Test explicit durations, for example `Am7:2, Dm7:1.5, G7`.
+- [ ] Test default and explicit lengths, for example `Am7:1/8D, Dm7:2beats, G7:1bar`.
+- [ ] Change DEFAULT LENGTH during playback. Confirm inherited steps update while
+      explicit note and beat lengths retain their duration.
+- [ ] Change the host meter among 4/4, 3/4, 6/8, and 7/8 during playback. Confirm
+      bar lengths, cards, loop phase, export metadata, and the drag subtitle update.
+- [ ] Remove the host meter or use an unavailable transport. Confirm the editor shows
+      the 4/4 fallback and bar lengths use four beats.
 - [ ] Switch between voice-led and root-position voicing and confirm audibly
       different, valid voicings.
 - [ ] Start, stop, seek, loop, and bypass during playback; confirm there are no
@@ -935,13 +968,14 @@ runs them.
 - [ ] Export a `.mid`, import it, and compare it with live playback.
 - [ ] Enter invalid text and confirm the last valid progression keeps playing with
       clear diagnostics.
-- [ ] Confirm the learning table shows the expected degrees and spelled notes for
+- [ ] Confirm the chord cards show the expected degrees and spelled notes for
       the current key and voicing.
 - [ ] Save and reload the project; confirm the text, key, mode, voicing, range,
-      velocity, loop, and bass settings restore.
-- [ ] Confirm the Beats column shows `4` for chords without a `:N` suffix and the
-      explicit value for chords with one.
-- [ ] Change the text and press Regenerate; confirm the table updates immediately.
+      velocity, default length, loop, and bass settings restore. Load an older
+      project and confirm its default length is four beats.
+- [ ] Confirm cards show DEFAULT only for inherited steps and show the selected or
+      written musical length with its resolved beat count.
+- [ ] Change the text and press Regenerate; confirm the cards update immediately.
 - [ ] Enter invalid text and press Regenerate; confirm the previous rows and plan
       stay and diagnostics appear.
 - [ ] In Bitwig, drag the clip preview into the arranger or onto a track.
@@ -950,7 +984,8 @@ runs them.
 - [ ] If the drop is ignored, click Reveal last clip and drag the file from
       Explorer into Bitwig.
 - [ ] Confirm Export `.mid` still works and that the exported file retains tempo
-      and 4/4 metadata.
+      and the current effective time-signature metadata. Confirm a drag clip omits
+      both metadata events.
 
 `pluginval` is optional. If it is installed, run it against the built VST3 and fix
 anything that affects this plugin. It is not required to build or use Chord Text.

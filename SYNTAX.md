@@ -9,15 +9,17 @@ The plugin produces MIDI only. The syntax determines which notes are generated.
 ```text
 Cmaj7, Am7, Dm7, G7       absolute chords
 i-iv-V                    Roman numerals
-Cmaj7:2, Am7:1.5, G7      durations in beats
+Cmaj7:1/8D, Am7:2beats    musical lengths
+G7:1bar                    bar length from the current meter
 C/E, F#m7b5/C             slash bass
 1, 6, 4, 5                numeric scale triads
-1(7), 2(7), 5(7):8        numeric scale sevenths and durations
+1(7), 2(7), 5(7):1/8T     numeric scale sevenths and musical lengths
 [1,2,4,5]                 custom notes: C D F G in C Major
 [1,3,5,F]                 degrees and a named note in one custom chord
 ```
 
-- Every chord lasts **4 beats by default**.
+- Every chord uses the selected default length when it has no suffix. New
+  projects start with **4 beats**.
 - Chords can be separated by commas, spaces, tabs, newlines, `|`, or `-`.
 - Empty input is valid and produces an empty progression.
 - Absolute chords and Roman numerals can be mixed in one progression.
@@ -47,7 +49,7 @@ Rules:
 - Separators may be mixed.
 - Repeated separators and leading or trailing separators are ignored.
 - `|` and `-` are **visual only**. They do not force a bar boundary and do not
-  change timing. Durations control timing.
+  change timing. Lengths control timing.
 - Empty text, or text containing only separators, is valid. It produces an
   empty progression with no notes and no errors.
 - Absolute chords, Roman numerals, and numeric degrees may be mixed in one progression.
@@ -55,40 +57,62 @@ Rules:
 > A hyphen is **not** a minor-quality alias. `C-E-G` means three chords
 > (C, E, G), not C minor. Write `Cm` or `Cmin` for C minor.
 
-## 2. Durations
+## 2. Musical lengths
 
-Every chord lasts 4 beats by default. Add `:N` to a chord to set its duration
-in beats:
+Add `:length` to any chord token. The suffix may be a note value, a beat
+amount, or a bar amount:
 
 ```text
-Cmaj7:2, Am7:1.5, Dm7:8, G7
+Cmaj7:1/8D, Am7:2beats, Dm7:1bar, G7:1/8T
+[1,3,5,F]:3/16, 6:1.5beats, 5:2bars
 ```
 
-| Input | Duration |
-|---|---|
-| `C` | 4 beats |
-| `C:2` | 2 beats |
-| `C:1.5` | 1.5 beats |
-| `C:0.25` | 0.25 beats |
+One internal beat is always one quarter note, including in 6/8. Existing bare
+numbers retain their meaning as quarter-note beats: `C:2` is two beats in every
+meter. The selected **DEFAULT LENGTH** applies only when the token has no suffix.
 
-Rules:
+| Input | Quarter-note beats |
+|---|---:|
+| `1/2`, `1/2D`, `1/2T` | 2, 3, 4/3 |
+| `1/4`, `1/4D`, `1/4T` | 1, 3/2, 2/3 |
+| `1/8`, `1/8D`, `1/8T` | 1/2, 3/4, 1/3 |
+| `1/16`, `1/16D`, `1/16T` | 1/4, 3/8, 1/6 |
+| `3/16` | 3/4 |
+| `N` or `Nbeat` / `Nbeats` | N beats |
+| `Nbar` / `Nbars` | N × the current bar length |
 
-- `N` must be a positive, finite number. Fractional values are allowed.
-- Zero, negative values, NaN, infinity, and malformed values are errors.
-- Durations affect live playback, MIDI export, the loop length, and the Beats
-  column.
-- The loop length is the sum of all chord durations.
-- A chord's note-on occurs at its start beat and its note-off at
-  start + duration.
+Note fractions accept a positive integer numerator and a denominator of 1, 2,
+4, 8, 16, 32, or 64. `D` means dotted and multiplies by 3/2. `T` means
+triplet and multiplies by 2/3. Lower-case `d` and `t` are accepted. Beat and
+bar amounts accept positive finite decimals. Unit words are case-insensitive.
+Spaces are not allowed inside a suffix.
+
+The plugin's menu has 19 stable choices: half, quarter, eighth, and sixteenth
+notes with straight, dotted, and triplet variants; `3/16`; 1, 2, and 4 beats;
+and 1, 2, and 4 bars. The CLI also accepts valid entered forms such as `5/16`
+that are not menu choices.
+
+Bar lengths use the DAW's current time signature. One bar is four beats in
+4/4, three beats in 3/4 or 6/8, and 3.5 beats in 7/8. If the DAW does not
+supply a valid signature, the plugin uses 4/4 and marks it as a fallback. A
+host meter change rebuilds bar-based and inherited-bar lengths for the whole
+progression. Explicit note and beat values do not change.
+
+Lengths affect live playback, MIDI export, drag clips, the loop length, and
+the chord cards. A card shows the written or selected length, its resolved
+beat count, and **DEFAULT** only when it inherits the selected default. The
+loop length is the sum of resolved step lengths. A chord's note-on occurs at
+its start beat and its note-off occurs at start + length.
 
 Invalid examples:
 
 ```text
-Cmaj7:0        error: duration must be positive
-Cmaj7:-1       error: duration must be positive
-Cmaj7:nan      error: not a finite number
-Cmaj7:inf      error: not a finite number
-Cmaj7:1.5.2    error: malformed number
+Cmaj7:0        error: invalid length "0"
+Cmaj7:1/3      error: invalid length "1/3"
+Cmaj7:1/8DT    error: invalid length "1/8DT"
+Cmaj7:1beatD   error: invalid length "1beatD"
+Cmaj7: 2       error: invalid length " 2"
+Cmaj7:nan      error: invalid length "nan"
 ```
 
 ## 3. Absolute chords
@@ -115,7 +139,7 @@ G#maj7   -> G# B# D# F##
 Cb       -> Cb Eb Gb
 ```
 
-Octave and MIDI pitch are chosen by the voicer. The learning table uses each
+Octave and MIDI pitch are chosen by the voicer. The chord cards use each
 chord's spelled tones.
 
 ### 3.3 Supported qualities and aliases
@@ -325,8 +349,13 @@ C major regardless of the selected key.
 | Voicing | No | Changes the generated pitches, not the parse |
 | Range | No | Changes the generated octaves, not the parse |
 | Velocity | No | Changes MIDI velocity, not the parse |
+| Default Length | Yes, for tokens without a suffix | Per-project default; starts at 4 beats |
 | Loop | No | Changes playback repetition, not the parse |
 | Bass | No | Adds the voiced root at a lower octave; it does not change the input |
+
+The current DAW time signature is runtime context, not a saved selector. It
+resolves only bar expressions. Missing or invalid host meter uses the 4/4
+fallback.
 
 ### 5.1 Supported scales
 
@@ -364,15 +393,16 @@ its root. The scale determines the chord quality.
 | A Harmonic Minor | `3(7)` | Cmaj7#5: C E G# B |
 | A Melodic Minor | `6(7)` | F#m7b5: F# A C E |
 
-Use the existing separators and duration syntax:
+Use the existing separators and length syntax:
 
 ```text
 1-6-4-5
-1:8, vi7, F, 5(7)
-2(7):8
+1:1/8D, vi7, F:1bar, 5(7)
+2(7):3/16
 ```
 
-Each chord lasts four beats by default. `2(7):8` lasts eight beats.
+Each chord uses the selected default length when it has no suffix. `2(7):3/16`
+lasts three sixteenths.
 The editor preserves your input. Numeric cards show the resolved chord and both
 degree forms, for example `Dm7` and `Degree 2 · ii7` in C Major.
 
@@ -462,8 +492,8 @@ notes.
 
 Lists must contain 1 to 128 entries. `[1]` is valid. Empty lists, empty entries,
 trailing commas, missing commas, nested brackets, and unmatched brackets are
-errors. Put the duration after the closing bracket, for example
-`[1,2,4,5]:2`. The brackets keep list commas, spaces, and octave-minus signs from
+errors. Put the length after the closing bracket, for example
+`[1,2,4,5]:1/8`. The brackets keep list commas, spaces, and octave-minus signs from
 starting another chord. Existing numeric chord syntax outside brackets remains
 1 to 7, so `1645` is still invalid.
 
@@ -531,8 +561,13 @@ An empty progression is valid and has no diagnostics.
 ```text
 progression := separator* (token separator*)*
 separator   := "," | "|" | "-" | whitespace
-token       := chord (":" duration)?
-duration    := positive finite number
+token       := chord (":" length)?
+length      := bareBeats | noteLength | beatLength | barLength
+bareBeats   := positive finite number
+noteLength  := positiveInteger "/" noteDenominator ("D" | "T")?
+noteDenominator := "1" | "2" | "4" | "8" | "16" | "32" | "64"
+beatLength  := positive finite number ("beat" | "beats")
+barLength   := positive finite number ("bar" | "bars")
 chord       := absolute | roman | numeric | custom
 numeric     := [1-7] ("(7)" | numericQuality)?
 numericQuality := see section 5.3
@@ -564,7 +599,7 @@ Notes:
 - `|` and `-` are separators only; they do not change timing.
 - Ordinary tokens cannot contain spaces; spaces separate tokens. Spaces around
   entries inside a custom list are allowed.
-- The duration colon belongs to the token, for example `Cmaj7:2`.
+- The length colon belongs to the token, for example `Cmaj7:1/8D`.
 - Absolute root accidentals come after the root letter. Roman accidentals come
   before the numeral.
 
@@ -589,7 +624,9 @@ Notes:
 | `F3@+1` | Exact pitches cannot also have a relative offset | `F3` or `F@+1` |
 | `c` | Root letters must be uppercase | `C` |
 | `V/V` | Applied/secondary numerals are unsupported | Write the target chord absolutely |
-| `Cmaj7:0` | Durations must be positive | `Cmaj7:0.5` |
+| `Cmaj7:0` | Lengths must be positive | `Cmaj7:0.5` |
+| `Cmaj7:1/3` | The note denominator is unsupported | `Cmaj7:1/4` |
+| `Cmaj7:1beatD` | Dotted and triplet modifiers apply only to note fractions | `Cmaj7:1/8D` |
 | `C maj7` | The space splits the token | `Cmaj7` |
 | `C: 2` | The space splits the token | `C:2` |
 
@@ -617,10 +654,10 @@ i, iv, V, i
 
 In A minor this is Am, Dm, E, Am.
 
-### Explicit durations
+### Explicit musical lengths
 
 ```text
-Cmaj7:2, Am7:1.5, Dm7:4, G7:0.5
+Cmaj7:1/8D, Am7:2beats, Dm7:1bar, G7:1/8T
 ```
 
 ### Slash bass
@@ -652,7 +689,7 @@ Supported:
 - absolute chord symbols with the qualities and alterations listed above;
 - Roman numerals in major and minor keys;
 - slash bass on absolute chords;
-- per-chord durations;
+- per-chord musical lengths;
 - custom note-list chords and optional root bass;
 - mixed absolute and Roman progressions;
 - the separators listed above.
