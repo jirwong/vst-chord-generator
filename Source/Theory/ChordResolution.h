@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Theory/Diagnostic.h"
+#include "Theory/Note.h"
 #include "Theory/Progression.h"
 #include "Theory/Voicer.h"
 
@@ -12,6 +13,8 @@ namespace chordtext
 struct ResolvedChord
 {
     std::vector<int> chordPitches;
+    // For custom chords, spellings aligned with chordPitches after pitch sorting.
+    std::vector<PitchClass> chordSpellings;
     std::vector<int> pitches;
     int rootMidi = 0;
     std::optional<int> bassMidi;

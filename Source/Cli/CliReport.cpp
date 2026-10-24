@@ -213,14 +213,24 @@ CliReport buildReport (std::string_view text, const CliSettings& settings)
         {
             if (step.chord.spec().customNotes.has_value())
             {
-                const auto tone = std::find_if (step.chord.tones().begin(), step.chord.tones().end(),
-                    [pitch] (const PitchClass& spelling)
-                    {
-                        return (spelling.semitone() % 12 + 12) % 12
-                            == (pitch % 12 + 12) % 12;
-                    });
-                row.notes.push_back (tone == step.chord.tones().end()
-                    ? noteNameForPitch (step.chord, pitch) : voicedNoteName (*tone, pitch));
+                const auto& resolvedChord = resolution.chords->at (index);
+                const auto resolvedNote = std::lower_bound (resolvedChord.chordPitches.begin(),
+                                                            resolvedChord.chordPitches.end(), pitch);
+                if (resolvedNote != resolvedChord.chordPitches.end() && *resolvedNote == pitch)
+                {
+                    const auto noteIndex = static_cast<std::size_t> (
+                        resolvedNote - resolvedChord.chordPitches.begin());
+                    row.notes.push_back (voicedNoteName (
+                        resolvedChord.chordSpellings[noteIndex], pitch));
+                }
+                else if (row.bassMidi == pitch && row.bassNote.has_value())
+                {
+                    row.notes.push_back (*row.bassNote);
+                }
+                else
+                {
+                    row.notes.push_back (noteNameForPitch (step.chord, pitch));
+                }
             }
             else
             {

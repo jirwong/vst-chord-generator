@@ -79,7 +79,8 @@ ChordResolutionResult resolveProgression (const Progression& progression,
                 return result;
             }
 
-            chord.chordPitches.reserve (customEntries->size());
+            std::vector<std::pair<int, PitchClass>> customPitches;
+            customPitches.reserve (customEntries->size());
             for (const auto& entry : *customEntries)
             {
                 const auto baselinePitch = baselinePitchFor (baseline, entry.pitchClass);
@@ -100,14 +101,32 @@ ChordResolutionResult resolveProgression (const Progression& progression,
                     return result;
                 }
 
-                chord.chordPitches.push_back (pitch);
+                customPitches.emplace_back (pitch, entry.pitchClass);
                 if (&entry == customEntries->data())
                     chord.rootMidi = pitch;
+            }
+
+            std::stable_sort (customPitches.begin(), customPitches.end(),
+                              [] (const auto& left, const auto& right)
+                              {
+                                  return left.first < right.first;
+                              });
+            for (const auto& note : customPitches)
+            {
+                if (chord.chordPitches.empty() || chord.chordPitches.back() != note.first)
+                {
+                    chord.chordPitches.push_back (note.first);
+                    chord.chordSpellings.push_back (note.second);
+                }
             }
         }
         else
         {
             chord.chordPitches = baseline;
+            std::sort (chord.chordPitches.begin(), chord.chordPitches.end());
+            chord.chordPitches.erase (
+                std::unique (chord.chordPitches.begin(), chord.chordPitches.end()),
+                chord.chordPitches.end());
             const auto root = ordinaryRootPitch (step.chord, baseline);
             if (! root.has_value())
             {
@@ -118,9 +137,6 @@ ChordResolutionResult resolveProgression (const Progression& progression,
             chord.rootMidi = *root;
         }
 
-        std::sort (chord.chordPitches.begin(), chord.chordPitches.end());
-        chord.chordPitches.erase (std::unique (chord.chordPitches.begin(), chord.chordPitches.end()),
-                                  chord.chordPitches.end());
         chord.pitches = chord.chordPitches;
 
         if (bassOctaves > 0)

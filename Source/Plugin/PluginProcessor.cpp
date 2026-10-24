@@ -502,19 +502,15 @@ void ChordTextAudioProcessor::rebuildPlan()
         row.degree = chordtext::degreeLabel (step.chord, key);
         if (step.chord.spec().customNotes.has_value())
         {
-            for (const auto pitch : (*resolution.chords)[index].chordPitches)
+            const auto& resolvedChord = (*resolution.chords)[index];
+            for (std::size_t noteIndex = 0; noteIndex < resolvedChord.chordPitches.size();
+                 ++noteIndex)
             {
-                const auto pitchClass = (pitch % 12 + 12) % 12;
-                const auto tone = std::find_if (step.chord.tones().begin(), step.chord.tones().end(),
-                    [pitchClass] (const chordtext::PitchClass& candidate)
-                    {
-                        return (candidate.semitone() % 12 + 12) % 12 == pitchClass;
-                    });
                 if (! row.notes.isEmpty())
                     row.notes += " ";
-                row.notes += tone != step.chord.tones().end()
-                    ? juce::String (chordtext::voicedNoteName (*tone, pitch))
-                    : juce::String (chordtext::noteNameForPitch (step.chord, pitch));
+                row.notes += juce::String (chordtext::voicedNoteName (
+                    resolvedChord.chordSpellings[noteIndex],
+                    resolvedChord.chordPitches[noteIndex]));
             }
             row.formula = step.sourceText;
         }

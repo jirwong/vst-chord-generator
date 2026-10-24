@@ -889,6 +889,18 @@ int main()
         CHECK ((sortedUnique (noteOnPitches (midi)) == std::vector<int> {60, 64, 67, 72}));
     }
 
+    // Exact custom-note spellings stay attached to their pitches across octaves.
+    {
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("[C#4,Db5]");
+        p.rebuildPlan();
+
+        const auto rows = p.getLearningRows();
+        CHECK (rows.size() == 1);
+        if (! rows.empty())
+            CHECK (rows[0].notes == "C#4 Db5");
+    }
+
     // Pitch errors keep the prior live plan and rows, but block stale output paths.
     {
         FakePlayHead head;

@@ -319,6 +319,11 @@ int main()
             == std::vector<std::string> { "C2", "D2", "F2", "G2" }));
     CHECK (customReport.chords[0].durationBeats == 2.0);
 
+    const auto enharmonicCustomReport = buildReport ("[C#4,Db5]", tableSettings);
+    CHECK (enharmonicCustomReport.valid);
+    CHECK ((enharmonicCustomReport.chords[0].notes
+            == std::vector<std::string> { "C#4", "Db5" }));
+
     const auto singleError = buildReport ("C, H", CliSettings {});
     CHECK (formatHuman (singleError).find ("1 error:\n") != std::string::npos);
 

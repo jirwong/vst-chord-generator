@@ -261,6 +261,22 @@ static void checkCustomChordResolution()
         CHECK ((*octaveResult.chords)[0].rootMidi == 36);
     }
 
+    const auto enharmonicNotes = parseProgression ("[C#4,Db5]", cMajor);
+    const auto enharmonicResult = resolveProgression (*enharmonicNotes.progression,
+                                                       rootPosition, 0);
+    CHECK (enharmonicResult.chords && enharmonicResult.chords->size() == 1);
+    if (enharmonicResult.chords)
+    {
+        const auto& resolved = enharmonicResult.chords->front();
+        CHECK ((resolved.chordPitches == std::vector<int> {61, 73}));
+        CHECK (resolved.chordSpellings.size() == 2);
+        if (resolved.chordSpellings.size() == 2)
+        {
+            CHECK (resolved.chordSpellings[0].name() == "C#");
+            CHECK (resolved.chordSpellings[1].name() == "Db");
+        }
+    }
+
     const auto pinnedRoot = parseProgression ("[F3,1,3,5]", cMajor);
     const auto pinnedResult = resolveProgression (*pinnedRoot.progression, rootPosition, 1);
     CHECK (pinnedResult.chords && pinnedResult.chords->size() == 1);
