@@ -3,6 +3,7 @@
 #include "Theory/Chord.h"
 #include "Theory/Diagnostic.h"
 #include "Theory/Key.h"
+#include "Theory/Length.h"
 
 #include <cstddef>
 #include <optional>
@@ -19,6 +20,9 @@ struct ProgressionStep
     std::string sourceText;
     std::size_t offset = 0;
     int numericDegree = 0;
+    LengthSpec length;
+    std::string lengthExpression;
+    bool usesDefaultLength = true;
 };
 
 struct Progression
@@ -33,5 +37,6 @@ struct ProgressionParseResult
     std::vector<Diagnostic> diagnostics;
 };
 
-ProgressionParseResult parseProgression (std::string_view text, const Key& key);
+ProgressionParseResult parseProgression (std::string_view text, const Key& key,
+                                         const TimingSettings& timing = {});
 }

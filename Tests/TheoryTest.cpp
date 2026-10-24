@@ -4,6 +4,7 @@
 #include "Theory/ChordResolution.h"
 #include "Theory/CustomChordParser.h"
 #include "Theory/Key.h"
+#include "Theory/Length.h"
 #include "Theory/NumericDegreeParser.h"
 #include "Theory/MidiFileWriter.h"
 #include "Theory/Note.h"
@@ -12,6 +13,7 @@
 #include "Theory/Voicer.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -98,6 +100,155 @@ static bool containsBytes (const std::vector<std::uint8_t>& bytes,
 {
     return std::search (bytes.begin(), bytes.end(), pattern.begin(), pattern.end())
         != bytes.end();
+}
+
+static void checkLengthParsingAndResolution()
+{
+    const std::array<std::string_view, 19> presetExpressions {{
+        "1/2", "1/2D", "1/2T",
+        "1/4", "1/4D", "1/4T",
+        "1/8", "1/8D", "1/8T",
+        "1/16", "1/16D", "1/16T",
+        "3/16", "1beat", "2beats", "4beats", "1bar", "2bars", "4bars"
+    }};
+    const std::array<double, 19> presetBeats {{
+        2.0, 3.0, 4.0 / 3.0,
+        1.0, 1.5, 2.0 / 3.0,
+        0.5, 0.75, 1.0 / 3.0,
+        0.25, 0.375, 1.0 / 6.0,
+        0.75, 1.0, 2.0, 4.0, 4.0, 8.0, 16.0
+    }};
+
+    const auto& presets = lengthPresets();
+    CHECK (presets.size() == presetExpressions.size());
+    for (std::size_t index = 0; index < presetExpressions.size(); ++index)
+    {
+        CHECK (presets[index].expression == presetExpressions[index]);
+        CHECK (formatLength (presets[index].length) == presetExpressions[index]);
+        CHECK_NEAR (resolveLength (presets[index].length, {4, 4}).value_or (-1.0),
+                    presetBeats[index], 1e-12);
+    }
+    CHECK (presets[15].expression == "4beats");
+
+    const auto triplet = parseLength ("1/8T");
+    CHECK (triplet.value.has_value());
+    if (triplet.value)
+        CHECK_NEAR (resolveLength (*triplet.value, {6, 8}).value_or (-1.0),
+                    1.0 / 3.0, 1e-12);
+
+    const auto shortTriplet = parseLength ("1/64T");
+    CHECK (shortTriplet.value.has_value());
+    if (shortTriplet.value)
+        CHECK_NEAR (resolveLength (*shortTriplet.value, {4, 4}).value_or (-1.0),
+                    1.0 / 24.0, 1e-12);
+
+    const auto threeSixteenths = parseLength ("3/16");
+    CHECK (threeSixteenths.value.has_value());
+    if (threeSixteenths.value)
+        CHECK_NEAR (resolveLength (*threeSixteenths.value, {4, 4}).value_or (-1.0),
+                    0.75, 1e-12);
+
+    const auto decimalBeats = parseLength ("1.5beats");
+    CHECK (decimalBeats.value.has_value());
+    if (decimalBeats.value)
+        CHECK_NEAR (resolveLength (*decimalBeats.value, {4, 4}).value_or (-1.0), 1.5, 1e-12);
+
+    const auto halfBar = parseLength ("0.5bar");
+    CHECK (halfBar.value.has_value());
+    if (halfBar.value)
+        CHECK_NEAR (resolveLength (*halfBar.value, {7, 8}).value_or (-1.0), 1.75, 1e-12);
+
+    const auto lowerCase = parseLength ("1/8t");
+    CHECK (lowerCase.value.has_value());
+    if (lowerCase.value)
+        CHECK (formatLength (*lowerCase.value) == "1/8T");
+
+    CHECK ((parseTimeSignature ("6/8") == std::optional<TimeSignature> {{6, 8}}));
+    CHECK (! parseTimeSignature ("0/4"));
+    CHECK (! parseTimeSignature ("256/4"));
+    CHECK (! parseTimeSignature ("4/3"));
+    CHECK (isValidTimeSignature ({1, 1}));
+    CHECK (isValidTimeSignature ({255, 64}));
+    CHECK (! isValidTimeSignature ({0, 4}));
+    CHECK (! isValidTimeSignature ({256, 4}));
+    CHECK (! isValidTimeSignature ({4, 3}));
+
+    for (const auto invalid : {"1/3", "1/0", "0/8", "1/128", "1/8DT", "1beatD",
+                               "1 bar", "nan", "inf", "1/", "/8", "1/8junk"})
+        CHECK (! parseLength (invalid).value.has_value());
+}
+
+static void checkProgressionLengthContext()
+{
+    const Key cMajor {{'C', 0}, Mode::major};
+    TimingSettings timing;
+    const auto defaultLength = parseLength ("1/8D");
+    CHECK (defaultLength.value.has_value());
+    if (! defaultLength.value)
+        return;
+
+    timing.defaultLength = *defaultLength.value;
+    timing.signature = {6, 8};
+
+    const auto parsed = parseProgression ("C, Dm:2, G:1bar, [1,3,5]:1/8T", cMajor, timing);
+    CHECK (parsed.progression.has_value());
+    if (parsed.progression)
+    {
+        const auto& steps = parsed.progression->steps;
+        CHECK (steps.size() == 4);
+        if (steps.size() == 4)
+        {
+            CHECK_NEAR (steps[0].durationBeats, 0.75, 1e-12);
+            CHECK_NEAR (steps[1].durationBeats, 2.0, 1e-12);
+            CHECK_NEAR (steps[2].durationBeats, 3.0, 1e-12);
+            CHECK_NEAR (steps[3].durationBeats, 1.0 / 3.0, 1e-12);
+            CHECK (steps[0].usesDefaultLength);
+            CHECK (! steps[1].usesDefaultLength);
+            CHECK (! steps[2].usesDefaultLength);
+            CHECK (! steps[3].usesDefaultLength);
+            CHECK (steps[0].lengthExpression == "1/8D");
+            CHECK (steps[1].lengthExpression == "2beats");
+            CHECK (steps[2].lengthExpression == "1bar");
+            CHECK (steps[3].lengthExpression == "1/8T");
+            CHECK (steps[0].sourceText == "C");
+            CHECK (steps[1].sourceText == "Dm");
+            CHECK (steps[2].sourceText == "G");
+            CHECK (steps[3].sourceText == "[1,3,5]");
+            CHECK (steps[0].offset == 0);
+            CHECK (steps[1].offset == 3);
+            CHECK (steps[2].offset == 9);
+            CHECK (steps[3].offset == 17);
+        }
+    }
+
+    const auto slashChord = parseProgression ("C/E:1/8", cMajor, timing);
+    CHECK (slashChord.progression && slashChord.progression->steps.size() == 1);
+    if (slashChord.progression && slashChord.progression->steps.size() == 1)
+        CHECK_NEAR (slashChord.progression->steps[0].durationBeats, 0.5, 1e-12);
+
+    const auto customChord = parseProgression ("[F3,1@-1]:1/4T", cMajor, timing);
+    CHECK (customChord.progression && customChord.progression->steps.size() == 1);
+    if (customChord.progression && customChord.progression->steps.size() == 1)
+        CHECK_NEAR (customChord.progression->steps[0].durationBeats, 2.0 / 3.0, 1e-12);
+
+    const auto legacy = parseProgression ("C:2.5, Dm", cMajor);
+    CHECK (legacy.progression && legacy.progression->steps.size() == 2);
+    if (legacy.progression && legacy.progression->steps.size() == 2)
+    {
+        CHECK_NEAR (legacy.progression->steps[0].durationBeats, 2.5, 1e-12);
+        CHECK_NEAR (legacy.progression->steps[1].durationBeats, 4.0, 1e-12);
+    }
+
+    CHECK (parseProgression ("", cMajor, timing).progression.has_value());
+    CHECK (parseProgression ("C:1/8|Dm:1beat-G:1bar", cMajor, timing).progression.has_value());
+
+    for (const auto invalid : {"C:1/3", "C:1/0", "C:0/8", "C:1/128", "C:1/8DT",
+                               "C:1beatD", "C:1 bar", "C:nan", "C:inf", "C:", "C:1/"})
+    {
+        const auto result = parseProgression (invalid, cMajor, timing);
+        CHECK (! result.progression.has_value());
+        CHECK (! result.diagnostics.empty());
+    }
 }
 
 static void checkCustomChordParsing()
@@ -432,6 +583,8 @@ static void checkResolutionBoundsAndRenderPlan()
 
 int main()
 {
+    checkLengthParsingAndResolution();
+    checkProgressionLengthContext();
     checkCustomChordParsing();
     checkCustomGrammarDiagnostics();
     checkCustomChordResolution();

@@ -23,6 +23,7 @@ set(THEORY_SOURCES
     Source/Theory/ChordSymbolParser.cpp
     Source/Theory/RomanNumeralParser.cpp
     Source/Theory/NumericDegreeParser.cpp
+    Source/Theory/Length.cpp
     Source/Theory/Progression.cpp
     Source/Theory/Voicer.cpp
     Source/Theory/ChordResolution.cpp
