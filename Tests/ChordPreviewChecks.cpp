@@ -127,6 +127,28 @@ std::vector<int> readMidiNoteOnPitches (const juce::File& file)
     return result;
 }
 
+bool midiContainsTempoAndTimeSignature (const juce::File& file)
+{
+    juce::FileInputStream input (file);
+    if (! input.openedOk())
+        return false;
+
+    juce::MidiFile midiFile;
+    if (! midiFile.readFrom (input))
+        return false;
+
+    auto hasTempo = false;
+    auto hasTimeSignature = false;
+    for (int track = 0; track < midiFile.getNumTracks(); ++track)
+        for (int index = 0; index < midiFile.getTrack (track)->getNumEvents(); ++index)
+        {
+            const auto message = midiFile.getTrack (track)->getEventPointer (index)->message;
+            hasTempo = hasTempo || message.isTempoMetaEvent();
+            hasTimeSignature = hasTimeSignature || message.isTimeSignatureMetaEvent();
+        }
+    return hasTempo && hasTimeSignature;
+}
+
 void captureEditor (juce::Component& editor, const juce::String& name)
 {
     const auto directoryPath = juce::SystemStats::getEnvironmentVariable (
@@ -387,6 +409,53 @@ void checkMomentaryAndHeldPreview()
         CHECK ((sortedUnique (pitches (released, false)) == std::vector<int> {48, 52, 55}));
         CHECK (renderBlock (processor).isEmpty());
         CHECK (processor.getPreviewFeedback().mode == chordscript::PreviewMode::idle);
+    }
+
+    // Bass is present in momentary and held output and is released on automation.
+    {
+        ChordTextAudioProcessor processor;
+        configureRootPosition (processor, "[C5,E4,G4]:2", 83);
+        auto* bass = processor.apvts.getParameter ("bassOctaves");
+        CHECK (bass != nullptr);
+        if (bass != nullptr)
+            bass->setValueNotifyingHost (1.0f / 3.0f);
+        processor.rebuildPlan();
+        processor.setPlayHead (nullptr);
+        processor.prepareToPlay (48000.0, 512);
+
+        const auto outputDirectory = juce::File::getCurrentWorkingDirectory()
+                                         .getChildFile ("build/Tests");
+        const auto exportFile = outputDirectory.getNonexistentChildFile (
+            "custom-bass-export", ".mid", false);
+        juce::String error;
+        CHECK (processor.exportMidiFile (exportFile, error));
+        CHECK ((readMidiNoteOnPitches (exportFile) == std::vector<int> {60, 64, 67, 72}));
+        CHECK (midiContainsTempoAndTimeSignature (exportFile));
+        const auto dragFile = processor.createDragClipFile (error, outputDirectory);
+        CHECK (dragFile.existsAsFile());
+        CHECK ((readMidiNoteOnPitches (dragFile) == std::vector<int> {60, 64, 67, 72}));
+        CHECK (! midiContainsTempoAndTimeSignature (dragFile));
+
+        auto revision = processor.getPreviewCardRevision();
+        auto gesture = processor.beginMomentaryPreview (0, revision);
+        CHECK (gesture != 0);
+        CHECK ((sortedUnique (pitches (renderBlock (processor), true))
+                == std::vector<int> {60, 64, 67, 72}));
+        processor.endMomentaryPreview (gesture);
+        CHECK ((sortedUnique (pitches (renderBlock (processor), false))
+                == std::vector<int> {60, 64, 67, 72}));
+
+        revision = processor.getPreviewCardRevision();
+        processor.toggleHeldPreview (0, revision);
+        CHECK ((sortedUnique (pitches (renderBlock (processor), true))
+                == std::vector<int> {60, 64, 67, 72}));
+        if (bass != nullptr)
+            bass->setValueNotifyingHost (2.0f / 3.0f);
+        CHECK (processor.getPreviewCardRevision() == 0);
+        CHECK (processor.beginMomentaryPreview (0, revision) == 0);
+        CHECK ((sortedUnique (pitches (renderBlock (processor), false))
+                == std::vector<int> {60, 64, 67, 72}));
+        CHECK (pitches (renderBlock (processor), true).empty());
     }
 }
 

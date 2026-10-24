@@ -368,7 +368,7 @@ int main()
             CHECK (before == after);
             CHECK (! juce::AudioProcessor::getXmlFromBinary (after.getData(), static_cast<int> (after.getSize()))
                         ->toString().contains ("uiScalePercent"));
-            CHECK (firstProcessor.getParameters().size() == 7);
+            CHECK (firstProcessor.getParameters().size() == 8);
             firstProcessor.setStateInformation (before.getData(), static_cast<int> (before.getSize()));
             CHECK (first.getWidth() == 1200 && selector->getSelectedId() == 125);
             second.reset();
@@ -465,7 +465,7 @@ int main()
         CHECK (legacy != nullptr && legacy->choices.size() == 2);
         CHECK (scale != nullptr && scale->choices.size() == 9);
         CHECK (legacy->convertFrom0to1 (1.0f) == 1.0f);
-        CHECK (p.getParameters().getLast() == scale);
+        CHECK (p.getParameters().getUnchecked (p.getParameters().size() - 2) == scale);
         if (scale != nullptr)
         {
             p.setProgressionText ("1, 2(7)");
@@ -818,6 +818,124 @@ int main()
         CHECK (rows.size() == 4 && rows[0].notes == "C E G B");
         CHECK (p.getProgressionText() == "Cmaj7, Am7, Dm7, G7");
         CHECK (p.getProgramName (0) == "Default");
+    }
+
+    // Bass octave choices remain per-instance state and follow the stable parameters.
+    {
+        ChordTextAudioProcessor p;
+        auto* bass = dynamic_cast<juce::AudioParameterChoice*> (
+            p.apvts.getParameter ("bassOctaves"));
+        CHECK (bass != nullptr);
+        CHECK (bass != nullptr && bass->choices.size() == 4);
+        CHECK (bass != nullptr && bass->choices[0] == "Off");
+        CHECK (bass != nullptr && bass->choices[1] == "1 octave down");
+        CHECK (bass != nullptr && bass->choices[2] == "2 octaves down");
+        CHECK (bass != nullptr && bass->choices[3] == "3 octaves down");
+        CHECK (bass != nullptr && bass->getIndex() == 0 && bass->isAutomatable());
+        CHECK (p.getParameters().getLast() == bass);
+        CHECK (p.getParameters().getUnchecked (p.getParameters().size() - 2)
+               == p.apvts.getParameter ("scaleMode"));
+        if (bass != nullptr)
+        {
+            for (int offset = 0; offset <= 3; ++offset)
+            {
+                bass->setValueNotifyingHost (static_cast<float> (offset) / 3.0f);
+                juce::MemoryBlock state;
+                p.getStateInformation (state);
+                ChordTextAudioProcessor restored;
+                restored.setStateInformation (state.getData(), static_cast<int> (state.getSize()));
+                CHECK (choiceIndex (restored, "bassOctaves") == offset);
+            }
+
+            auto oldState = p.apvts.copyState();
+            oldState.removeChild (oldState.getChildWithProperty ("id", "bassOctaves"), nullptr);
+            juce::MemoryBlock oldBytes;
+            juce::AudioProcessor::copyXmlToBinary (*oldState.createXml(), oldBytes);
+            bass->setValueNotifyingHost (1.0f);
+            p.setStateInformation (oldBytes.getData(), static_cast<int> (oldBytes.getSize()));
+            CHECK (choiceIndex (p, "bassOctaves") == 0);
+        }
+    }
+
+    // Plugin rows and live generation share the final custom chord and bass pitches.
+    {
+        FakePlayHead head;
+        head.set (0.0, true, 120.0);
+        ChordTextAudioProcessor p;
+        p.apvts.getParameter ("voicing")->setValueNotifyingHost (1.0f);
+        p.setProgressionText ("[C5,E4,G4]:2");
+        if (auto* bass = p.apvts.getParameter ("bassOctaves"))
+            bass->setValueNotifyingHost (1.0f / 3.0f);
+        p.rebuildPlan();
+
+        const auto rows = p.getLearningRows();
+        CHECK (p.getDiagnostics().empty());
+        CHECK (rows.size() == 1);
+        if (! rows.empty())
+        {
+            CHECK (rows[0].chord == "C custom");
+            CHECK (rows[0].degree == "custom");
+            CHECK (rows[0].formula == "[C5,E4,G4]");
+            CHECK (rows[0].notes == "E4 G4 C5");
+            CHECK (rows[0].bass == "C4");
+            CHECK (rows[0].durationBeats == 2.0);
+        }
+
+        p.setPlayHead (&head);
+        p.prepareToPlay (48000.0, 512);
+        juce::AudioBuffer<float> audio (2, 512);
+        juce::MidiBuffer midi;
+        p.processBlock (audio, midi);
+        CHECK ((sortedUnique (noteOnPitches (midi)) == std::vector<int> {60, 64, 67, 72}));
+    }
+
+    // Pitch errors keep the prior live plan and rows, but block stale output paths.
+    {
+        FakePlayHead head;
+        head.set (0.0, true, 120.0);
+        ChordTextAudioProcessor p;
+        p.apvts.getParameter ("voicing")->setValueNotifyingHost (1.0f);
+        p.setProgressionText ("C");
+        if (auto* bass = p.apvts.getParameter ("bassOctaves"))
+            bass->setValueNotifyingHost (1.0f / 3.0f);
+        p.rebuildPlan();
+        p.setPlayHead (&head);
+        p.prepareToPlay (48000.0, 512);
+
+        juce::AudioBuffer<float> audio (2, 512);
+        juce::MidiBuffer midi;
+        p.processBlock (audio, midi);
+        CHECK ((sortedUnique (noteOnPitches (midi)) == std::vector<int> {36, 48, 52, 55}));
+        const auto oldRevision = p.getPreviewCardRevision();
+
+        p.setProgressionText ("[C-1]");
+        const auto rows = p.getLearningRows();
+        CHECK (! p.getDiagnostics().empty());
+        CHECK (rows.size() == 1 && rows[0].chord == "C");
+        CHECK (rows.size() == 1 && rows[0].bass == "C2");
+        CHECK (p.getPreviewCardRevision() == 0);
+        CHECK (p.beginMomentaryPreview (0, oldRevision) == 0);
+
+        head.set (4.0, true, 120.0);
+        p.processBlock (audio, midi);
+        CHECK ((sortedUnique (noteOnPitches (midi)) == std::vector<int> {36, 48, 52, 55}));
+
+        const auto outputDirectory = juce::File::getCurrentWorkingDirectory()
+                                         .getChildFile ("build/Tests");
+        const auto exportFile = outputDirectory.getNonexistentChildFile (
+            "invalid-bass", ".mid", false);
+        juce::String error;
+        CHECK (! p.exportMidiFile (exportFile, error));
+        CHECK (! exportFile.existsAsFile());
+        const auto drag = p.createDragClipFile (error, outputDirectory);
+        CHECK (! drag.existsAsFile());
+
+        p.setProgressionText ("");
+        CHECK (p.getDiagnostics().empty());
+        CHECK (p.getLearningRows().empty());
+        p.setProgressionText ("Dm");
+        CHECK (p.getDiagnostics().empty());
+        CHECK (p.getLearningRows().size() == 1);
     }
 
     // key change updates the parsed rows and generated pitches

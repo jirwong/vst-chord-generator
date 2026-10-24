@@ -16,6 +16,8 @@ struct LearningRow
     juce::String chord;
     juce::String degree;
     juce::String notes;
+    juce::String formula;
+    juce::String bass;
     double durationBeats = 4.0;
     int numericDegree = 0;
 };

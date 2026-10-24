@@ -2,6 +2,8 @@
 
 #include "PluginEditor.h"
 #include "Theory/Chord.h"
+#include "Theory/ChordResolution.h"
+#include "Theory/CustomChordParser.h"
 #include "Theory/Key.h"
 #include "Theory/MidiFileWriter.h"
 #include "Theory/Progression.h"
@@ -102,6 +104,7 @@ ChordTextAudioProcessor::ChordTextAudioProcessor()
     apvts.addParameterListener ("key", this);
     apvts.addParameterListener ("mode", this);
     apvts.addParameterListener ("scaleMode", this);
+    apvts.addParameterListener ("bassOctaves", this);
     apvts.addParameterListener ("voicing", this);
     apvts.addParameterListener ("range", this);
     apvts.addParameterListener ("velocity", this);
@@ -117,6 +120,7 @@ ChordTextAudioProcessor::~ChordTextAudioProcessor()
     apvts.removeParameterListener ("key", this);
     apvts.removeParameterListener ("mode", this);
     apvts.removeParameterListener ("scaleMode", this);
+    apvts.removeParameterListener ("bassOctaves", this);
     apvts.removeParameterListener ("voicing", this);
     apvts.removeParameterListener ("range", this);
     apvts.removeParameterListener ("velocity", this);
@@ -158,6 +162,10 @@ ChordTextAudioProcessor::createParameterLayout()
     layout.add (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { "scaleMode", 1 }, "Scale Mode", scaleNames, 0));
 
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { "bassOctaves", 1 }, "Bass",
+        juce::StringArray { "Off", "1 octave down", "2 octaves down", "3 octaves down" }, 0));
+
     return layout;
 }
 
@@ -184,7 +192,8 @@ void ChordTextAudioProcessor::parameterChanged (const juce::String& parameterID,
                                          || parameterID == "scaleMode"
                                          || parameterID == "voicing"
                                          || parameterID == "range"
-                                         || parameterID == "velocity";
+                                         || parameterID == "velocity"
+                                         || parameterID == "bassOctaves";
 
     if (requiresRebuiltVoicings)
     {
@@ -448,7 +457,19 @@ void ChordTextAudioProcessor::rebuildPlan()
     settings.highMidi = rangeHighMidi[static_cast<std::size_t> (rangeIndex)];
 
     const auto& progression = *parsed.progression;
-    const auto voicings = chordtext::voiceProgression (progression, settings);
+    const auto bassOctaves = std::clamp (parameterIndex ("bassOctaves"), 0, 3);
+    const auto resolution = chordtext::resolveProgression (progression, settings, bassOctaves);
+    if (! resolution.diagnostics.empty() || ! resolution.chords.has_value())
+    {
+        diagnostics.insert (diagnostics.end(), resolution.diagnostics.begin(),
+                            resolution.diagnostics.end());
+        return;
+    }
+
+    std::vector<std::vector<int>> voicings;
+    voicings.reserve (resolution.chords->size());
+    for (const auto& chord : *resolution.chords)
+        voicings.push_back (chord.pitches);
     const auto velocity = std::clamp (parameterIndex ("velocity"), 1, 127);
 
     publishPlan (chordtext::buildRenderPlan (progression, voicings, velocity));
@@ -479,7 +500,32 @@ void ChordTextAudioProcessor::rebuildPlan()
         LearningRow row;
         row.chord = step.chord.symbol();
         row.degree = chordtext::degreeLabel (step.chord, key);
-        row.notes = chordtext::notesForVoicing (step.chord, voicings[index]);
+        if (step.chord.spec().customNotes.has_value())
+        {
+            for (const auto pitch : (*resolution.chords)[index].chordPitches)
+            {
+                const auto pitchClass = (pitch % 12 + 12) % 12;
+                const auto tone = std::find_if (step.chord.tones().begin(), step.chord.tones().end(),
+                    [pitchClass] (const chordtext::PitchClass& candidate)
+                    {
+                        return (candidate.semitone() % 12 + 12) % 12 == pitchClass;
+                    });
+                if (! row.notes.isEmpty())
+                    row.notes += " ";
+                row.notes += tone != step.chord.tones().end()
+                    ? juce::String (chordtext::voicedNoteName (*tone, pitch))
+                    : juce::String (chordtext::noteNameForPitch (step.chord, pitch));
+            }
+            row.formula = step.sourceText;
+        }
+        else
+        {
+            row.notes = chordtext::notesForVoicing (step.chord,
+                                                    (*resolution.chords)[index].chordPitches);
+        }
+        if ((*resolution.chords)[index].bassMidi.has_value())
+            row.bass = chordtext::voicedNoteName (step.chord.spec().root,
+                                                  *(*resolution.chords)[index].bassMidi);
         row.durationBeats = step.durationBeats;
         row.numericDegree = step.numericDegree;
         learningRows.push_back (std::move (row));
@@ -1130,6 +1176,15 @@ void ChordTextAudioProcessor::setStateInformation (const void* data, int sizeInB
         scaleState.setProperty ("id", "scaleMode", nullptr);
         scaleState.setProperty ("value", std::clamp (static_cast<int> (legacy.getProperty ("value", 0)), 0, 1), nullptr);
         tree.addChild (scaleState, -1, nullptr);
+    }
+
+    auto bassState = tree.getChildWithProperty ("id", "bassOctaves");
+    if (! bassState.isValid())
+    {
+        bassState = juce::ValueTree ("PARAM");
+        bassState.setProperty ("id", "bassOctaves", nullptr);
+        bassState.setProperty ("value", 0, nullptr);
+        tree.addChild (bassState, -1, nullptr);
     }
     const auto selected = std::clamp (static_cast<int> (scaleState.getProperty ("value", 0)), 0, 8);
     scaleState.setProperty ("value", selected, nullptr);
