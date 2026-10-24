@@ -10,6 +10,15 @@
 
 namespace chordtext
 {
+struct CustomNoteEntry
+{
+    PitchClass pitchClass;
+    int octaveOffset = 0;
+    std::optional<int> exactMidi;
+    std::string sourceText;
+    std::size_t offset = 0;
+};
+
 struct ChordSpec
 {
     PitchClass root;
@@ -17,6 +26,7 @@ struct ChordSpec
     std::vector<std::pair<int, int>> alterations;
     std::optional<PitchClass> slashBass;
     std::string sourceText;
+    std::optional<std::vector<CustomNoteEntry>> customNotes;
 };
 
 class Chord

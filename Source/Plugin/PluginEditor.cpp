@@ -130,6 +130,8 @@ void ChordSequenceComponent::CardContent::setRows (std::vector<LearningRow> newR
             if (rows[index].chord != newRows[index].chord
                 || rows[index].degree != newRows[index].degree
                 || rows[index].notes != newRows[index].notes
+                || rows[index].formula != newRows[index].formula
+                || rows[index].bass != newRows[index].bass
                 || rows[index].numericDegree != newRows[index].numericDegree
                 || rows[index].durationBeats != newRows[index].durationBeats)
             {
@@ -143,6 +145,7 @@ void ChordSequenceComponent::CardContent::setRows (std::vector<LearningRow> newR
     }
 
     rows = std::move (newRows);
+    setTooltip ({});
     currentStep = newCurrentStep;
     stale = isStale;
     displayedRevision = newDisplayedRevision;
@@ -251,6 +254,30 @@ void ChordSequenceComponent::CardContent::mouseUp (const juce::MouseEvent&)
         owner->onMomentaryRelease (gestureId);
 }
 
+void ChordSequenceComponent::CardContent::mouseMove (const juce::MouseEvent& event)
+{
+    const auto index = cardAt (event.getPosition());
+    if (index < 0)
+    {
+        setTooltip ({});
+        return;
+    }
+
+    const auto& row = rows[static_cast<std::size_t> (index)];
+    auto text = row.chord + "\n";
+    text += row.formula.isNotEmpty() ? row.formula : row.degree;
+    text += "\n" + row.notes;
+    if (row.bass.isNotEmpty())
+        text += "\nBass: " + row.bass;
+    text += "\n" + formatBeats (row.durationBeats) + " beats";
+    setTooltip (text);
+}
+
+void ChordSequenceComponent::CardContent::mouseExit (const juce::MouseEvent&)
+{
+    setTooltip ({});
+}
+
 void ChordSequenceComponent::CardContent::paint (juce::Graphics& g)
 {
     g.fillAll (backgroundColour);
@@ -325,16 +352,26 @@ void ChordSequenceComponent::CardContent::paint (juce::Graphics& g)
                           juce::Justification::centredLeft, 1);
         g.setColour (dimTextColour);
         g.setFont (juce::Font (juce::FontOptions (11.0f)));
-        const auto analysis = rows[index].numericDegree > 0
-            ? "Degree " + juce::String (rows[index].numericDegree)
-                + juce::String::fromUTF8 (" \xc2\xb7 ") + rows[index].degree
-            : rows[index].degree;
-        g.drawFittedText (analysis, inner.removeFromTop (18), juce::Justification::centredLeft, 1);
+        const auto analysis = rows[index].formula.isNotEmpty() ? rows[index].formula
+            : rows[index].numericDegree > 0
+                ? "Degree " + juce::String (rows[index].numericDegree)
+                    + juce::String::fromUTF8 (" \xc2\xb7 ") + rows[index].degree
+                : rows[index].degree;
+        g.drawText (analysis, inner.removeFromTop (18), juce::Justification::centredLeft, true);
 
         g.setColour (dimTextColour);
         g.setFont (juce::Font (juce::FontOptions (13.0f)));
-        g.drawFittedText (rows[index].notes, inner.removeFromTop (35),
-                          juce::Justification::centredLeft, 1);
+        g.drawText (rows[index].notes, inner.removeFromTop (
+                        rows[index].bass.isNotEmpty() ? 24 : 35),
+                    juce::Justification::centredLeft, true);
+
+        if (rows[index].bass.isNotEmpty())
+        {
+            g.setColour (accentColour);
+            g.setFont (juce::Font (juce::FontOptions (11.0f)));
+            g.drawFittedText ("Bass: " + rows[index].bass, inner.removeFromTop (18),
+                              juce::Justification::centredLeft, 1);
+        }
 
         g.setColour (dimTextColour);
         g.setFont (juce::Font (juce::FontOptions (10.0f)));
@@ -348,7 +385,8 @@ void ChordSequenceComponent::CardContent::paint (juce::Graphics& g)
 ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProcessor& p, UiSettings settings)
     : juce::AudioProcessorEditor (&p),
       processor (p),
-      uiSettings (std::move (settings))
+      uiSettings (std::move (settings)),
+      tooltipWindow (this)
 {
     editorContent.setComponentID ("editorContent");
     addAndMakeVisible (editorContent);
@@ -366,6 +404,8 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     configureLabel (modeLabel, "MODE", dimTextColour, 11.0f);
     configureLabel (scaleSummaryLabel, {}, dimTextColour, 12.0f);
     scaleSummaryLabel.setComponentID ("scaleSummary");
+    configureLabel (bassLabel, "BASS", dimTextColour, 11.0f);
+    bassLabel.setComponentID ("bassLabel");
     configureLabel (voicingLabel, "VOICING", dimTextColour, 11.0f);
     configureLabel (rangeLabel, "RANGE", dimTextColour, 11.0f);
     configureLabel (velocityLabel, "VELOCITY", dimTextColour, 11.0f);
@@ -449,6 +489,8 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     modeBox.setComponentID ("modeBox");
     setUpCombo (voicingBox, "voicing");
     setUpCombo (rangeBox, "range");
+    setUpCombo (bassBox, "bassOctaves");
+    bassBox.setComponentID ("bassBox");
 
     velocitySlider.setSliderStyle (juce::Slider::LinearHorizontal);
     velocitySlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 46, 22);
@@ -559,6 +601,7 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     editorContent.addAndMakeVisible (rangeLabel);
     editorContent.addAndMakeVisible (velocityLabel);
     editorContent.addAndMakeVisible (velocitySlider);
+    editorContent.addAndMakeVisible (bassLabel);
     editorContent.addAndMakeVisible (loopButton);
     editorContent.addAndMakeVisible (exportButton);
     editorContent.addAndMakeVisible (regenerateButton);
@@ -577,6 +620,8 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     voicingAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "voicing",
                                                              voicingBox);
     rangeAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "range", rangeBox);
+    bassAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "bassOctaves",
+                                                           bassBox);
     velocityAttachment = std::make_unique<SliderAttachment> (processor.apvts, "velocity",
                                                              velocitySlider);
     loopAttachment = std::make_unique<ButtonAttachment> (processor.apvts, "loop", loopButton);
@@ -698,7 +743,13 @@ void ChordTextAudioProcessorEditor::layoutContent()
     const auto velocityWidth = std::max (80, controlFields.getRight() - x - loopWidth - gap);
     placeControl (velocityLabel, velocitySlider, velocityWidth);
     loopButton.setBounds (x, controlFields.getY(), loopWidth, controlFields.getHeight());
-    scaleSummaryLabel.setBounds (content.removeFromTop (22));
+    const auto summaryRow = content.removeFromTop (28);
+    constexpr int bassControlWidth = 224;
+    constexpr int summaryGap = 12;
+    const auto bassControlX = summaryRow.getRight() - bassControlWidth;
+    scaleSummaryLabel.setBounds (summaryRow.withTrimmedRight (bassControlWidth + summaryGap));
+    bassLabel.setBounds (bassControlX, summaryRow.getY() + 6, 44, 16);
+    bassBox.setBounds (bassControlX + 52, summaryRow.getY(), 172, summaryRow.getHeight());
     content.removeFromTop (4);
 
     constexpr int sequenceHeaderHeight = 40;

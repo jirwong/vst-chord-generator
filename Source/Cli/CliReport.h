@@ -19,6 +19,8 @@ struct CliChordRow
     std::vector<std::string> spelledTones;
     std::vector<std::string> notes;
     std::vector<int> voicing;
+    std::optional<int> bassMidi;
+    std::optional<std::string> bassNote;
     double startBeat = 0.0;
     double durationBeats = 4.0;
 };

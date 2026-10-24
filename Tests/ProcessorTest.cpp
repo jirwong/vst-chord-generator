@@ -368,7 +368,7 @@ int main()
             CHECK (before == after);
             CHECK (! juce::AudioProcessor::getXmlFromBinary (after.getData(), static_cast<int> (after.getSize()))
                         ->toString().contains ("uiScalePercent"));
-            CHECK (firstProcessor.getParameters().size() == 7);
+            CHECK (firstProcessor.getParameters().size() == 8);
             firstProcessor.setStateInformation (before.getData(), static_cast<int> (before.getSize()));
             CHECK (first.getWidth() == 1200 && selector->getSelectedId() == 125);
             second.reset();
@@ -465,7 +465,7 @@ int main()
         CHECK (legacy != nullptr && legacy->choices.size() == 2);
         CHECK (scale != nullptr && scale->choices.size() == 9);
         CHECK (legacy->convertFrom0to1 (1.0f) == 1.0f);
-        CHECK (p.getParameters().getLast() == scale);
+        CHECK (p.getParameters().getUnchecked (p.getParameters().size() - 2) == scale);
         if (scale != nullptr)
         {
             p.setProgressionText ("1, 2(7)");
@@ -818,6 +818,136 @@ int main()
         CHECK (rows.size() == 4 && rows[0].notes == "C E G B");
         CHECK (p.getProgressionText() == "Cmaj7, Am7, Dm7, G7");
         CHECK (p.getProgramName (0) == "Default");
+    }
+
+    // Bass octave choices remain per-instance state and follow the stable parameters.
+    {
+        ChordTextAudioProcessor p;
+        auto* bass = dynamic_cast<juce::AudioParameterChoice*> (
+            p.apvts.getParameter ("bassOctaves"));
+        CHECK (bass != nullptr);
+        CHECK (bass != nullptr && bass->choices.size() == 4);
+        CHECK (bass != nullptr && bass->choices[0] == "Off");
+        CHECK (bass != nullptr && bass->choices[1] == "1 octave down");
+        CHECK (bass != nullptr && bass->choices[2] == "2 octaves down");
+        CHECK (bass != nullptr && bass->choices[3] == "3 octaves down");
+        CHECK (bass != nullptr && bass->getIndex() == 0 && bass->isAutomatable());
+        CHECK (p.getParameters().getLast() == bass);
+        CHECK (p.getParameters().getUnchecked (p.getParameters().size() - 2)
+               == p.apvts.getParameter ("scaleMode"));
+        if (bass != nullptr)
+        {
+            for (int offset = 0; offset <= 3; ++offset)
+            {
+                bass->setValueNotifyingHost (static_cast<float> (offset) / 3.0f);
+                juce::MemoryBlock state;
+                p.getStateInformation (state);
+                ChordTextAudioProcessor restored;
+                restored.setStateInformation (state.getData(), static_cast<int> (state.getSize()));
+                CHECK (choiceIndex (restored, "bassOctaves") == offset);
+            }
+
+            auto oldState = p.apvts.copyState();
+            oldState.removeChild (oldState.getChildWithProperty ("id", "bassOctaves"), nullptr);
+            juce::MemoryBlock oldBytes;
+            juce::AudioProcessor::copyXmlToBinary (*oldState.createXml(), oldBytes);
+            bass->setValueNotifyingHost (1.0f);
+            p.setStateInformation (oldBytes.getData(), static_cast<int> (oldBytes.getSize()));
+            CHECK (choiceIndex (p, "bassOctaves") == 0);
+        }
+    }
+
+    // Plugin rows and live generation share the final custom chord and bass pitches.
+    {
+        FakePlayHead head;
+        head.set (0.0, true, 120.0);
+        ChordTextAudioProcessor p;
+        p.apvts.getParameter ("voicing")->setValueNotifyingHost (1.0f);
+        p.setProgressionText ("[C5,E4,G4]:2");
+        if (auto* bass = p.apvts.getParameter ("bassOctaves"))
+            bass->setValueNotifyingHost (1.0f / 3.0f);
+        p.rebuildPlan();
+
+        const auto rows = p.getLearningRows();
+        CHECK (p.getDiagnostics().empty());
+        CHECK (rows.size() == 1);
+        if (! rows.empty())
+        {
+            CHECK (rows[0].chord == "C custom");
+            CHECK (rows[0].degree == "custom");
+            CHECK (rows[0].formula == "[C5,E4,G4]");
+            CHECK (rows[0].notes == "E4 G4 C5");
+            CHECK (rows[0].bass == "C4");
+            CHECK (rows[0].durationBeats == 2.0);
+        }
+
+        p.setPlayHead (&head);
+        p.prepareToPlay (48000.0, 512);
+        juce::AudioBuffer<float> audio (2, 512);
+        juce::MidiBuffer midi;
+        p.processBlock (audio, midi);
+        CHECK ((sortedUnique (noteOnPitches (midi)) == std::vector<int> {60, 64, 67, 72}));
+    }
+
+    // Exact custom-note spellings stay attached to their pitches across octaves.
+    {
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("[C#4,Db5]");
+        p.rebuildPlan();
+
+        const auto rows = p.getLearningRows();
+        CHECK (rows.size() == 1);
+        if (! rows.empty())
+            CHECK (rows[0].notes == "C#4 Db5");
+    }
+
+    // Pitch errors keep the prior live plan and rows, but block stale output paths.
+    {
+        FakePlayHead head;
+        head.set (0.0, true, 120.0);
+        ChordTextAudioProcessor p;
+        p.apvts.getParameter ("voicing")->setValueNotifyingHost (1.0f);
+        p.setProgressionText ("C");
+        if (auto* bass = p.apvts.getParameter ("bassOctaves"))
+            bass->setValueNotifyingHost (1.0f / 3.0f);
+        p.rebuildPlan();
+        p.setPlayHead (&head);
+        p.prepareToPlay (48000.0, 512);
+
+        juce::AudioBuffer<float> audio (2, 512);
+        juce::MidiBuffer midi;
+        p.processBlock (audio, midi);
+        CHECK ((sortedUnique (noteOnPitches (midi)) == std::vector<int> {36, 48, 52, 55}));
+        const auto oldRevision = p.getPreviewCardRevision();
+
+        p.setProgressionText ("[C-1]");
+        const auto rows = p.getLearningRows();
+        CHECK (! p.getDiagnostics().empty());
+        CHECK (rows.size() == 1 && rows[0].chord == "C");
+        CHECK (rows.size() == 1 && rows[0].bass == "C2");
+        CHECK (p.getPreviewCardRevision() == 0);
+        CHECK (p.beginMomentaryPreview (0, oldRevision) == 0);
+
+        head.set (4.0, true, 120.0);
+        p.processBlock (audio, midi);
+        CHECK ((sortedUnique (noteOnPitches (midi)) == std::vector<int> {36, 48, 52, 55}));
+
+        const auto outputDirectory = juce::File::getCurrentWorkingDirectory()
+                                         .getChildFile ("build/Tests");
+        const auto exportFile = outputDirectory.getNonexistentChildFile (
+            "invalid-bass", ".mid", false);
+        juce::String error;
+        CHECK (! p.exportMidiFile (exportFile, error));
+        CHECK (! exportFile.existsAsFile());
+        const auto drag = p.createDragClipFile (error, outputDirectory);
+        CHECK (! drag.existsAsFile());
+
+        p.setProgressionText ("");
+        CHECK (p.getDiagnostics().empty());
+        CHECK (p.getLearningRows().empty());
+        p.setProgressionText ("Dm");
+        CHECK (p.getDiagnostics().empty());
+        CHECK (p.getLearningRows().size() == 1);
     }
 
     // key change updates the parsed rows and generated pitches
@@ -1421,6 +1551,99 @@ int main()
             CHECK (sequenceStatus->getText() == juce::String::fromUTF8 ("\xe2\x9c\x93  Valid progression"));
             CHECK (exportButton->isEnabled());
             CHECK (clip->isEnabled());
+        }
+    }
+
+    // Bass control stays beside the scale summary at every UI scale.
+    {
+        ChordTextAudioProcessor p;
+        p.setProgressionText ("[C5,E4,G4]");
+        const auto settingsDirectory = juce::File::getCurrentWorkingDirectory()
+            .getChildFile ("build/Tests/ui-settings")
+            .getChildFile (juce::Uuid().toString());
+        CHECK (settingsDirectory.createDirectory().wasOk());
+        ChordTextAudioProcessorEditor editor (
+            p, UiSettings (settingsDirectory.getChildFile ("bass-ui.json")));
+        editor.setVisible (true);
+
+        auto* scale = dynamic_cast<juce::ComboBox*> (findEditorChild (editor, "uiScaleBox"));
+        auto* summary = dynamic_cast<juce::Label*> (findEditorChild (editor, "scaleSummary"));
+        auto* bassLabel = dynamic_cast<juce::Label*> (findEditorChild (editor, "bassLabel"));
+        auto* bass = dynamic_cast<juce::ComboBox*> (findEditorChild (editor, "bassBox"));
+        auto* loop = findEditorChild (editor, "loopButton");
+        const auto snapshotDirectory = juce::SystemStats::getEnvironmentVariable (
+            "CHORDSCRIPT_UI_SNAPSHOT_DIR", {});
+        const auto capture = [&] (const juce::String& name)
+        {
+            if (snapshotDirectory.isEmpty())
+                return;
+            juce::File directory (snapshotDirectory);
+            CHECK (directory.createDirectory().wasOk());
+            juce::FileOutputStream output (directory.getChildFile (name + ".png"));
+            CHECK (output.openedOk());
+            output.setPosition (0);
+            output.truncate();
+            CHECK (juce::PNGImageFormat().writeImageToStream (
+                editor.createComponentSnapshot (editor.getLocalBounds()), output));
+        };
+
+        CHECK (scale != nullptr && summary != nullptr && bassLabel != nullptr
+               && bass != nullptr && loop != nullptr);
+        if (scale != nullptr && summary != nullptr && bassLabel != nullptr
+            && bass != nullptr && loop != nullptr)
+        {
+            CHECK (bassLabel->getText() == "BASS");
+            CHECK (bass->getNumItems() == 4);
+            CHECK (bass->getSelectedId() == 1);
+            CHECK (choiceIndex (p, "bassOctaves") == 0);
+
+            bass->setSelectedId (2, juce::sendNotificationSync);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+            for (const auto percent : {75, 100, 125, 150})
+            {
+                scale->setSelectedId (percent, juce::sendNotificationSync);
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
+                CHECK (summary->getRight() + 12 <= bassLabel->getX());
+                CHECK (bassLabel->getY() >= bass->getY());
+                CHECK (bassLabel->getBottom() <= bass->getBottom());
+                CHECK (bass->getRight() == 932);
+                CHECK (loop->getRight() <= 932);
+                CHECK (choiceIndex (p, "bassOctaves") == 1);
+                CHECK (p.getLearningRows().size() == 1);
+                CHECK (p.getLearningRows()[0].chord == "C custom");
+                CHECK (p.getLearningRows()[0].formula == "[C5,E4,G4]");
+                CHECK (p.getLearningRows()[0].bass == "C4");
+                CHECK (p.getLearningRows()[0].notes.contains ("C5"));
+                capture ("bass-custom-" + juce::String (percent));
+
+                p.setProgressionText ("[C-1]");
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+                CHECK (! p.getDiagnostics().empty());
+                capture ("bass-invalid-" + juce::String (percent));
+                p.setProgressionText ("[C5,E4,G4]");
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+            }
+
+            scale->setSelectedId (100, juce::sendNotificationSync);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
+            juce::String longFormula = "[";
+            for (int index = 0; index < 128; ++index)
+            {
+                if (index != 0)
+                    longFormula += ",";
+                longFormula += "1";
+            }
+            longFormula += "]";
+            p.setProgressionText (longFormula);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+            CHECK (p.getLearningRows().size() == 1);
+            CHECK (p.getLearningRows()[0].formula == longFormula);
+            capture ("bass-long-formula-100");
+
+            p.setProgressionText ("[C4,C3]");
+            CHECK (p.getLearningRows().size() == 1);
+            CHECK (p.getLearningRows()[0].bass == "C3");
+            CHECK (p.getLearningRows()[0].notes == "C3 C4");
         }
     }
 

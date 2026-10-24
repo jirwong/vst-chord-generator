@@ -72,6 +72,7 @@ std::string helpMessage (const CliSettings& settings)
         "  :range <C2-C5|C3-C6|C4-C7>      Set the pitch range.\n"
         "  :velocity <1-127>               Set the note velocity.\n"
         "  :bpm <4-999>                    Set the tempo.\n"
+        "  :bass <off|1|2|3>               Add the root 1, 2, or 3 octaves down.\n"
         "  :json <on|off>                  Toggle JSON report output.\n"
         "  :export <path>                  Write the last valid progression to MIDI.\n"
         "  :help                           Show this help.\n"
@@ -228,6 +229,22 @@ CliSessionOutput CliSession::handleLine (std::string_view line)
             output.feedback = invalidValueMessage (command);
         }
     }
+    else if (command == "bass")
+    {
+        if (rest.empty())
+        {
+            output.feedback = invalidValueMessage (command);
+        }
+        else if (const auto value = parseBassOctaves (rest))
+        {
+            settings_.bassOctaves = *value;
+            output.feedback = formatSettingsLine (settings_) + "\n";
+        }
+        else
+        {
+            output.feedback = invalidValueMessage (command);
+        }
+    }
     else if (command == "json")
     {
         if (equalsIgnoreCase (rest, "on"))
@@ -262,6 +279,12 @@ CliSessionOutput CliSession::handleLine (std::string_view line)
         }
 
         const auto report = buildReport (*lastValidText_, settings_);
+
+        if (! report.valid)
+        {
+            output.feedback = "Cannot export: the last valid progression is invalid under current settings.\n";
+            return output;
+        }
 
         if (report.plan.events.empty())
         {

@@ -19,11 +19,13 @@ set(THEORY_SOURCES
     Source/Theory/Note.cpp
     Source/Theory/Key.cpp
     Source/Theory/Chord.cpp
+    Source/Theory/CustomChordParser.cpp
     Source/Theory/ChordSymbolParser.cpp
     Source/Theory/RomanNumeralParser.cpp
     Source/Theory/NumericDegreeParser.cpp
     Source/Theory/Progression.cpp
     Source/Theory/Voicer.cpp
+    Source/Theory/ChordResolution.cpp
     Source/Theory/RenderPlan.cpp
     Source/Theory/MidiFileWriter.cpp)
 set(CLI_CORE_SOURCES

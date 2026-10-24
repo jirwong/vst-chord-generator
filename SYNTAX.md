@@ -13,6 +13,8 @@ Cmaj7:2, Am7:1.5, G7      durations in beats
 C/E, F#m7b5/C             slash bass
 1, 6, 4, 5                numeric scale triads
 1(7), 2(7), 5(7):8        numeric scale sevenths and durations
+[1,2,4,5]                 custom notes: C D F G in C Major
+[1,3,5,F]                 degrees and a named note in one custom chord
 ```
 
 - Every chord lasts **4 beats by default**.
@@ -287,7 +289,8 @@ One accidental is typical. The parser also accepts repeated accidentals.
 
 ### 4.4 Key and mode
 
-The key selector supplies the tonic spelling and the major/minor mode.
+The key selector supplies the tonic spelling. The Mode selector supplies the
+selected scale.
 
 - The key always matters for Roman numerals.
 - Minor (Aeolian) uses natural-minor spelling for scale degrees.
@@ -323,6 +326,7 @@ C major regardless of the selected key.
 | Range | No | Changes the generated octaves, not the parse |
 | Velocity | No | Changes MIDI velocity, not the parse |
 | Loop | No | Changes playback repetition, not the parse |
+| Bass | No | Adds the voiced root at a lower octave; it does not change the input |
 
 ### 5.1 Supported scales
 
@@ -407,6 +411,84 @@ To check syntax without a DAW:
 chordtext-cli --key A --mode minor "i-iv-V"
 ```
 
+### 5.4 Custom note-list chords
+
+Use square brackets to enter the notes of one custom chord. Separate notes with
+commas. Spaces around the entries are allowed. Custom lists can appear between
+ordinary chords, Roman numerals, and numeric chords:
+
+```text
+[1,2,4,5]
+1, [1,3,5,F]:2, 6, 5
+```
+
+The list does not create a triad or seventh chord. Each entry adds one note. The
+first entry is the chord root. In C Major, `[1,2,4,5]` means C, D, F, G. The card
+shows `C custom`, the formula, and the notes after voicing.
+
+An entry can be a scale degree, or a named note:
+
+| Entry | Meaning |
+|---|---|
+| `1` to `7` | A note from the selected key and scale |
+| `8` to `14` | Degrees 1 to 7, one octave above their generated voices; `8` is the upper octave of degree 1 |
+| `b3`, `#4` | Lower or raise that scale note by one semitone |
+| `1@-1`, `1@+1` | Move the generated note one octave down or up |
+| `F`, `Bb`, `F#` | A named pitch class; it stays the same when the key changes |
+| `F3`, `C-1` | A named note at an exact scientific pitch octave |
+| `F@+1`, `Bb@-1` | Move an unpinned named pitch class relative to its generated voice |
+
+The selected mode supplies the scale note before a `b` or `#` is applied. In C
+natural minor, `3` is Eb and `b3` is D, spelled E-double-flat. Uppercase note
+letters mean named notes: `B3` is the exact note B3, while lowercase `b3` is a
+flattened third scale degree.
+
+The Range and Voicing controls make the automatic baseline voices. Relative
+octave entries follow those voices. An exact octave such as `F3` keeps that pitch
+even if the Range or Voicing changes. Use these examples to compare the rules:
+
+```text
+[1,2,4,5]       C D F G in C Major
+[1,3,5,F]       C E G F in C Major
+[F3,1,3,5]      F3 is the root; the other notes use automatic voicing
+[1@-1,1,8]      the tonic below, at, and above its generated voice
+```
+
+An exact note keeps its written spelling and octave. The final MIDI pitch must
+still be from 0 to 127. Relative notes and added bass notes outside this range
+make the chord invalid; the plugin does not clamp or omit them. Duplicate MIDI
+pitches sound once. The same pitch class in different octaves remains as separate
+notes.
+
+Lists must contain 1 to 128 entries. `[1]` is valid. Empty lists, empty entries,
+trailing commas, missing commas, nested brackets, and unmatched brackets are
+errors. Put the duration after the closing bracket, for example
+`[1,2,4,5]:2`. The brackets keep list commas, spaces, and octave-minus signs from
+starting another chord. Existing numeric chord syntax outside brackets remains
+1 to 7, so `1645` is still invalid.
+
+### 5.5 Added root bass
+
+Choose **BASS** in the plugin, or use `--bass` / `:bass` in the CLI:
+
+| Value | Result |
+|---|---|
+| `off` | Do not add a bass note (default) |
+| `1` | Add the chord root one octave down |
+| `2` | Add the chord root two octaves down |
+| `3` | Add the chord root three octaves down |
+
+The bass follows the chord's voiced root. For a custom chord, the first list
+entry is the root. It does not follow the lowest chord note or replace a slash
+bass. For example, `[1,3,5]` with BASS set to `1` adds the tonic one octave below
+the chord's generated root. If the requested bass would be outside MIDI pitches
+0 to 127, the progression is invalid.
+
+The bass applies to host playback, card preview, held preview, MIDI export, drag
+clips, and CLI output. It uses the chord's timing and velocity. The plugin saves
+the BASS choice in each project and exposes it to automation. The computer-wide
+UI scale setting is separate.
+
 ## 6. Errors and diagnostics
 
 Every parse error identifies the failing token, a zero-based character offset
@@ -440,7 +522,7 @@ If any token is invalid:
 - export and drag are disabled.
 
 The editor lists diagnostics directly below the progression input. In one-shot mode,
-the CLI prints the same diagnostics and exits with code 1.
+the CLI prints parse or pitch-resolution diagnostics and exits with code 1.
 
 An empty progression is valid and has no diagnostics.
 
@@ -451,9 +533,17 @@ progression := separator* (token separator*)*
 separator   := "," | "|" | "-" | whitespace
 token       := chord (":" duration)?
 duration    := positive finite number
-chord       := absolute | roman | numeric
+chord       := absolute | roman | numeric | custom
 numeric     := [1-7] ("(7)" | numericQuality)?
 numericQuality := see section 5.3
+
+custom      := "[" customEntry ("," customEntry)* "]"
+customEntry := scaleNote | namedNote
+scaleNote   := accidental? [1-7] octaveOffset? | [8-14]
+namedNote   := pitchClass (octave | octaveOffset)?
+pitchClass  := [A-G] ("#" | "b")?
+octaveOffset := "@-1" | "@+1"
+octave      := scientific pitch octave from -1 to 9
 
 absolute    := root quality? alteration* ("/" bass)?
 root        := [A-G] ("#" | "b")?
@@ -469,9 +559,11 @@ quality     := see the quality table in section 3
 
 Notes:
 
-- `separator*` allows empty progressions and repeated separators.
+- `separator*` allows empty progressions and repeated separators. Separators inside
+  a custom list are read as list content.
 - `|` and `-` are separators only; they do not change timing.
-- A token cannot contain spaces; spaces separate tokens.
+- Ordinary tokens cannot contain spaces; spaces separate tokens. Spaces around
+  entries inside a custom list are allowed.
 - The duration colon belongs to the token, for example `Cmaj7:2`.
 - Absolute root accidentals come after the root letter. Roman accidentals come
   before the numeral.
@@ -492,7 +584,9 @@ Notes:
 | `C(b5)` | Absolute chord parentheses are unsupported | `C7b5` or `Cm7b5` |
 | `1645` | Numeric degrees need separators | `1, 6, 4, 5` |
 | `27` | A bare digit suffix is unsupported | `2(7)` for a seventh, or `2, 7` for two chords |
-| `8` | Numeric degrees must be 1 through 7 | `1` for the tonic |
+| `8` | Extended degrees only work inside a custom list | `[8]` for the tonic an octave up |
+| `[1,3,5,]` | A custom list cannot have an empty last entry | `[1,3,5]` |
+| `F3@+1` | Exact pitches cannot also have a relative offset | `F3` or `F@+1` |
 | `c` | Root letters must be uppercase | `C` |
 | `V/V` | Applied/secondary numerals are unsupported | Write the target chord absolutely |
 | `Cmaj7:0` | Durations must be positive | `Cmaj7:0.5` |
@@ -559,6 +653,7 @@ Supported:
 - Roman numerals in major and minor keys;
 - slash bass on absolute chords;
 - per-chord durations;
+- custom note-list chords and optional root bass;
 - mixed absolute and Roman progressions;
 - the separators listed above.
 
@@ -570,6 +665,8 @@ Not supported in v1:
 - slash bass on Roman numerals;
 - double accidentals;
 - parenthesised alterations;
+- relative octave offsets other than one octave;
+- a piano-roll chord editor or inferred chord quality for custom lists;
 - key changes or modulation inside one progression.
 
 For the full feature and platform limits, see the repository

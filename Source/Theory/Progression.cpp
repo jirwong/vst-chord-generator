@@ -1,6 +1,7 @@
 #include "Theory/Progression.h"
 
 #include "Theory/ChordSymbolParser.h"
+#include "Theory/CustomChordParser.h"
 #include "Theory/RomanNumeralParser.h"
 #include "Theory/NumericDegreeParser.h"
 
@@ -8,6 +9,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstddef>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -99,9 +101,29 @@ ProgressionParseResult parseProgression (std::string_view text, const Key& key)
         }
 
         const auto start = position;
+        const auto startsCustomChord = text[position] == '[';
+        auto bracketDepth = 0;
 
-        while (position < text.size() && ! isSeparator (text[position]))
+        while (position < text.size())
+        {
+            const auto character = text[position];
+            if (startsCustomChord && bracketDepth > 0)
+            {
+                if (character == '[')
+                    ++bracketDepth;
+                else if (character == ']')
+                    --bracketDepth;
+                ++position;
+                continue;
+            }
+
+            if (isSeparator (character))
+                break;
+
+            if (startsCustomChord && character == '[')
+                ++bracketDepth;
             ++position;
+        }
 
         const auto raw = text.substr (start, position - start);
         const auto colon = raw.find (':');
@@ -137,7 +159,19 @@ ProgressionParseResult parseProgression (std::string_view text, const Key& key)
         const auto numeric = digit (chordText.front())
             || ((chordText.front() == 'b' || chordText.front() == '#')
                 && chordText.size() > 1 && digit (chordText[1]));
-        if (numeric)
+        if (! chordText.empty() && chordText.front() == '[')
+        {
+            auto parsed = parseCustomChord (chordText, key, start);
+            if (! parsed.diagnostics.empty())
+            {
+                result.diagnostics.insert (result.diagnostics.end(),
+                                           std::make_move_iterator (parsed.diagnostics.begin()),
+                                           std::make_move_iterator (parsed.diagnostics.end()));
+                continue;
+            }
+            spec = std::move (parsed.spec);
+        }
+        else if (numeric)
         {
             auto parsed = parseNumericDegree (chordText, key, start);
             spec = std::move (parsed.chord);

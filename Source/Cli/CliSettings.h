@@ -20,6 +20,7 @@ struct CliSettings
     int velocity = 100;
     double bpm = 120.0;
     bool json = false;
+    int bassOctaves = 0;
 
     Key key() const;
     VoicingSettings voicingSettings() const;
@@ -38,4 +39,5 @@ std::optional<VoicingMode> parseVoicing (std::string_view text);
 std::optional<int> parseRangeIndex (std::string_view text);
 std::optional<int> parseVelocity (std::string_view text);
 std::optional<double> parseBpm (std::string_view text);
+std::optional<int> parseBassOctaves (std::string_view text);
 }

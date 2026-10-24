@@ -164,6 +164,34 @@ std::string qualitySuffix (const std::string& quality)
 Chord::Chord (ChordSpec spec)
     : spec_ (std::move (spec))
 {
+    if (spec_.customNotes.has_value())
+    {
+        const auto samePitchClass = [] (const PitchClass& left, const PitchClass& right)
+        {
+            const auto leftPitch = (left.semitone() % 12 + 12) % 12;
+            const auto rightPitch = (right.semitone() % 12 + 12) % 12;
+            return leftPitch == rightPitch;
+        };
+
+        for (const auto& entry : *spec_.customNotes)
+            if (std::none_of (tones_.begin(), tones_.end(), [&entry, &samePitchClass] (const PitchClass& tone)
+                { return samePitchClass (tone, entry.pitchClass); }))
+                tones_.push_back (entry.pitchClass);
+
+        if (tones_.size() > 1)
+        {
+            const auto rootPitch = (tones_.front().semitone() % 12 + 12) % 12;
+            std::stable_sort (tones_.begin() + 1, tones_.end(), [rootPitch] (const PitchClass& left,
+                                                                               const PitchClass& right)
+            {
+                const auto leftDistance = (left.semitone() - rootPitch + 12) % 12;
+                const auto rightDistance = (right.semitone() - rootPitch + 12) % 12;
+                return leftDistance < rightDistance;
+            });
+        }
+        return;
+    }
+
     const auto intervals = buildIntervals (spec_);
     tones_.reserve (intervals.size());
 
@@ -183,6 +211,9 @@ const std::vector<PitchClass>& Chord::tones() const
 
 std::string Chord::symbol() const
 {
+    if (spec_.customNotes.has_value())
+        return spec_.root.name() + " custom";
+
     auto result = spec_.root.name() + spec_.quality;
 
     for (const auto& alteration : spec_.alterations)
@@ -196,6 +227,9 @@ std::string Chord::symbol() const
 
 std::string degreeLabel (const Chord& chord, const Key& key)
 {
+    if (chord.spec().customNotes.has_value())
+        return "custom";
+
     const auto root = chord.spec().root;
     const auto tonic = key.tonic();
     const auto degree = (letterIndex (root.letter) - letterIndex (tonic.letter) + 7) % 7 + 1;

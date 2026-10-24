@@ -1,12 +1,13 @@
 # Chordscript
 
 Chordscript is a Windows x64 VST3 MIDI generator. The host lists it as **Chord Text**.
-Type a chord progression as chord symbols, Roman numerals, or numbers from 1 to 7.
+Type a chord progression as chord symbols, Roman numerals, numeric chords, or
+custom note lists in square brackets.
 The plugin plays it in sync with the host transport, or
 exports it as a Standard MIDI File. You can also drag one loop from the editor into
 a DAW such as Bitwig as a MIDI clip. The editor shows chord cards. Each card
-shows the functional degree, the spelled chord tones, and the duration of each
-chord in beats.
+shows the functional degree or custom formula, the voiced chord tones, an optional
+root bass note, and the duration of each chord in beats.
 
 The plugin produces MIDI only. It has no audio output and no built-in synth. You
 must route it to an instrument in the host.
@@ -205,9 +206,9 @@ until processing resumes or the host flushes them; the same host-flush limitatio
 applies to normal playback.
 
 Preview stops immediately when you begin editing the progression text (before the
-150 ms parse), when key, mode, scale mode, voicing, range, velocity, or Loop changes,
-when project state is restored, when the editor closes, when the plugin is bypassed,
-and when the host resets processing. A cancelled hold does not restart automatically
+150 ms parse), when key, mode, scale mode, voicing, range, velocity, bass, or Loop
+changes, when project state is restored, when the editor closes, when the plugin is
+bypassed, and when the host resets processing. A cancelled hold does not restart automatically
 after a valid edit, unbypass, editor reopen, project load, or processing reset. A new
 gesture is required. Changing UI scale, exporting MIDI, and dragging a clip do not
 cancel preview. Transport start, stop, seek, loop wrap, and tempo changes do not
@@ -237,8 +238,8 @@ disables export and dragging.
 
 The full, canonical syntax guide is [SYNTAX.md](SYNTAX.md). It covers
 progressions and separators, durations, absolute chords and aliases,
-alterations, slash bass, Roman numerals, keys, grammar, diagnostics, and common
-mistakes.
+alterations, slash bass, Roman numerals, custom note lists, added root bass, keys,
+grammar, diagnostics, and common mistakes.
 
 Quick examples:
 
@@ -249,11 +250,14 @@ C:8, Am7:4, F:4, G:4
 C/E, F#m7b5/C
 1, 6, 4, 5
 1(7), 2(7), 5(7):8
+[1,2,4,5]
+1, [1,3,5,F]:2, 6, 5
 ```
 
 Every chord lasts 4 beats by default. Separators can be mixed. You can use absolute
 chords and Roman numerals in the same progression. The plugin editor and
-`chordtext-cli` share the parser, so the same text produces the same result in both.
+`chordtext-cli` share the parser and pitch resolver, so the same text and settings
+produce the same notes in both.
 To check syntax without a DAW, run `chordtext-cli "C, H"`.
 
 The key selector matters for Roman numerals, numeric chords, and degree labels. It does not
@@ -262,6 +266,18 @@ transpose absolute chords.
 Numbers select chords from the chosen scale. In C Major, `2` is Dm and `2(7)` is
 Dm7. In A Minor, `5` is Em. Use `5maj` for E or `5dom7` for E7.
 Separate the degrees: `1-6-4-5` is valid, but `1645` is invalid.
+
+Write a custom chord as a comma-separated list in square brackets. In C Major,
+`[1,2,4,5]` gives C, D, F, G. The first entry sets the root. You can mix scale
+degrees and named notes, for example `[1,3,5,F]`. A custom card shows its formula
+and octave-aware notes. Hover over a card to read the full text when a line is too
+long to fit.
+
+The **BASS** menu adds the custom chord's root, or another chord's voiced root,
+one, two, or three octaves lower. Its default is **Off**. For example, BASS `1`
+adds the root one octave down. Bass uses the chord's timing and velocity in
+playback, preview, export, and drag clips. The setting belongs to the plug-in
+instance and is saved in the DAW project.
 
 The Mode selector supports Major (Ionian), Minor (Aeolian), Dorian, Phrygian,
 Lydian, Mixolydian, Locrian, Harmonic Minor, and Melodic Minor. Melodic Minor
@@ -293,6 +309,9 @@ marks normal output as `PLAYING`.
 
 Numeric cards also show the numeric degree, for example `Degree 2 · ii7`.
 Cards show the last valid progression with reduced brightness while input is invalid.
+Custom cards show a formula in place of a degree label. When bass is on, they show
+the resolved bass note on a separate line. The full formula and notes are available
+in the card tooltip.
 
 ### Errors and diagnostics
 
@@ -315,6 +334,7 @@ examples.
 | Range | C3–C6 | C2–C5, C3–C6, or C4–C7 |
 | Velocity | 100 | 1–127 |
 | Loop | On | On or off |
+| Bass | Off | Add the chord's voiced root 1, 2, or 3 octaves lower |
 | Chord preview | — | Left-press to preview, release to stop; right-click to hold, right-click again to release |
 | Drag to DAW | — | Drags one loop as a `.mid` file; enabled for valid, non-empty progressions |
 | Reveal file | — | Opens Explorer at the most recent successful export or drag file |
@@ -324,15 +344,19 @@ All notes are sent on MIDI channel 1. Root-position voicing places the root at t
 lowest octave that fits the range. It stacks the remaining tones above the root.
 Voice-led voicing keeps the first chord in root position. It then chooses the
 inversion and octave placement that minimizes movement from the previous chord, and
-stays within the selected range. Slash bass remains the lowest note in both modes.
-The upper voices contain each chord tone once. A slash bass may duplicate its pitch
-class an octave below the upper chord tones (for example, `C/E` sounds two E's). v1
-has no other octave doubling.
+stays within the selected range. A slash bass is part of the chord voicing and is
+the lowest chord note in both modes. The optional added root bass is placed below
+the chord's voiced root; it may be higher than another low chord tone. Ordinary
+upper voices contain each chord tone once. A slash bass may duplicate its pitch
+class an octave below the upper chord tones (for example, `C/E` sounds two E's).
+Custom lists can request different octaves, and the optional root bass can add a
+lower root. Identical final MIDI pitches sound once.
 
 The project state saves the progression text, key, mode, voicing, range, velocity,
-and loop setting. It uses stable parameter IDs (`key`, `mode`, `voicing`, `range`,
-`velocity`, `loop`, `scaleMode`) plus the `progressionText` property. Restoring a project rebuilds
-the plan but does not start playback. Hosts must restore state on the message thread.
+loop, and bass octave setting. It uses stable parameter IDs (`key`, `mode`,
+`voicing`, `range`, `velocity`, `loop`, `scaleMode`, `bassOctaves`) plus the
+`progressionText` property. Restoring a project rebuilds the plan but does not start
+playback. Hosts must restore state on the message thread.
 If a host restores state on another thread, the plugin defers the plan rebuild to the
 message queue.
 
@@ -479,11 +503,12 @@ One-shot:
 
 ```bash
 ./build/Cli/chordtext-cli.exe --key A --mode minor "i-iv-V"
+./build/Cli/chordtext-cli.exe --key C --mode major --bass 1 "1, [1,3,5,F]:2, 6, 5"
 ```
 
 ```text
 Progression: i-iv-V
-Key: A minor · Voicing: voice-led · Range: C3-C6 · Velocity: 100
+Key: A minor · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off
 
 Chord  Degree  Notes   Beats  MIDI
 Am     i       A C E   4      57 60 64
@@ -499,7 +524,7 @@ echo "C, H, C99" | ./build/Cli/chordtext-cli.exe
 
 ```text
 Progression: C, H, C99
-Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100
+Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off
 
 2 errors:
 Error at character 3: unknown chord root (H)
@@ -513,16 +538,16 @@ prints the current settings, and the prompt is `chord> `. A session looks like:
 
 ```text
 Chord Text CLI — :help for commands
-Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100
+Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off
 
 chord> Cmaj7
 Progression: Cmaj7
-Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100
+Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off
 
 Chord  Degree  Notes    Beats  MIDI
 Cmaj7  Imaj7   C E G B  4      48 52 55 59
 chord> :key A
-Key: A major · Voicing: voice-led · Range: C3-C6 · Velocity: 100
+Key: A major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off
 chord> :quit
 ```
 
@@ -538,6 +563,7 @@ The full command list is under [REPL](#repl).
 | `--range <C2-C5\|C3-C6\|C4-C7>` | case-insensitive | `C3-C6` |
 | `--velocity <1-127>` | integer | `100` |
 | `--bpm <4-999>` | finite number in range | `120` |
+| `--bass <off\|1\|2\|3>` | Add the voiced chord root 1, 2, or 3 octaves down | `off` |
 | `--json` | flag | off |
 | `--out <path>` | file path | off |
 | `--help` | flag | — |
@@ -556,7 +582,7 @@ for empty text.
 
 ```text
 Progression: Cmaj7, Am7, Dm7, G7
-Key: C major · Voicing: root-position · Range: C2-C5 · Velocity: 100
+Key: C major · Voicing: root-position · Range: C2-C5 · Velocity: 100 · Bass: Off
 
 Chord  Degree  Notes    Beats  MIDI
 Cmaj7  Imaj7   C E G B  4      36 40 43 47
@@ -567,18 +593,19 @@ G7     V7      G B D F  4      43 47 50 53
 
 Columns are left-aligned with two spaces between them. The `Notes` column follows
 the current voicing and matches the plugin's learning table. An inversion therefore
-appears in voicing order, and a slash bass may repeat a pitch class. The `MIDI`
-column is the same voicing as space-separated MIDI note numbers, after the plugin
-applies the voicing, range, and slash bass. `Beats` uses compact formatting: integral
-values omit the decimal point (for example `4`, `1.5`). An empty progression is valid
-and prints `Empty progression (no chords).`.
+appears in voicing order. A custom chord's notes include octave names. The `MIDI`
+column lists all final pitches, including an added bass. When bass is enabled, the
+`Bass` column shows its octave-aware note name. The column is not shown when bass is
+Off. `Beats` uses compact formatting: integral values omit the decimal point (for
+example `4`, `1.5`). An empty progression is valid and prints
+`Empty progression (no chords).`.
 
 Diagnostics replace the table and use the editor's exact wording, one error per line
 with the token's character offset:
 
 ```text
 Progression: C, H, C99
-Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100
+Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off
 
 2 errors:
 Error at character 3: unknown chord root (H)
@@ -594,7 +621,7 @@ table from an earlier valid progression.
 | Code | Meaning |
 |---|---|
 | 0 | Progression parsed successfully (including an empty progression) and any requested file was written |
-| 1 | The progression has parse errors |
+| 1 | The progression has parse or pitch-resolution errors |
 | 2 | Usage error, or a requested file could not be written |
 
 In one-shot mode, results go to stdout and usage errors go to stderr. I/O errors go
@@ -617,6 +644,7 @@ settings. The REPL ignores a blank line. A parse error does not exit the REPL.
 | `:range <C2-C5\|C3-C6\|C4-C7>` | Set the pitch range |
 | `:velocity <1-127>` | Set the velocity |
 | `:bpm <4-999>` | Set the MIDI tempo |
+| `:bass <off\|1\|2\|3>` | Add the voiced chord root 1, 2, or 3 octaves down |
 | `:json <on\|off>` | Switch report formatting between human and JSON |
 | `:export <path>` | Write the last successfully parsed progression with the current settings |
 | `:help` | List commands and current settings |
@@ -624,7 +652,8 @@ settings. The REPL ignores a blank line. A parse error does not exit the REPL.
 
 After a successful setting change, the command prints the current-settings line. An
 invalid command or value prints a short error and keeps the previous value. `:export`
-with no valid progression yet prints an error and writes nothing. EOF (Ctrl+Z on
+with no valid progression yet, or when current settings make it invalid, prints an
+error and writes nothing. EOF (Ctrl+Z on
 Windows) exits the REPL. Command feedback goes to stderr and progression reports go
 to stdout, so stdout stays parseable when `:json on` is active.
 
@@ -642,7 +671,8 @@ newline:
     "voicing": "root-position",
     "range": "C2-C5",
     "velocity": 100,
-    "bpm": 120
+    "bpm": 120,
+    "bassOctaves": 0
   },
   "valid": true,
   "diagnostics": [],
@@ -654,6 +684,8 @@ newline:
       "spelledTones": ["C", "E", "G", "B"],
       "notes": ["C", "E", "G", "B"],
       "voicing": [36, 40, 43, 47],
+      "bassMidi": null,
+      "bassNote": null,
       "startBeat": 0,
       "durationBeats": 4
     }
@@ -669,17 +701,20 @@ instead.
 
 Field meanings:
 
-- `settings` holds the effective settings as canonical strings (`key` as written in
-  the option list, `mode` as `major`/`minor`, `voicing` as `voice-led`/
-  `root-position`, `range` as `C2-C5`/`C3-C6`/`C4-C7`).
-- `valid` is false when parse diagnostics are present; then `chords` is empty and
-  `diagnostics` is populated with `offset`, `token`, and `message` entries. An empty
+- `settings` holds the effective settings as canonical values (`key` as written in
+  the option list, `mode` as a mode name, `voicing` as `voice-led`/`root-position`,
+  `range` as `C2-C5`/`C3-C6`/`C4-C7`, and `bassOctaves` from 0 to 3).
+- `valid` is false when parse or pitch-resolution diagnostics are present. Then
+  `chords` is empty and `diagnostics` is populated with `offset`, `token`, and
+  `message` entries. An empty
   but valid progression has `"valid": true` and `"chords": []`.
-- `spelledTones` is the chord's tones in quality order, independent of voicing.
-- `notes` is the voiced spelling, one entry per `voicing` value, matching the human
-  table's `Notes` column.
+- `spelledTones` describes the chord itself. It does not include an added bass.
+- `notes` gives the sounding notes for `voicing`. It includes an added bass. Custom
+  chord note names include their octave.
 - `voicing` is an array of integers identical in value to the human table's
-  space-separated `MIDI` column.
+  space-separated `MIDI` column. It includes an added bass.
+- `bassMidi` and `bassNote` identify the added bass, or are `null` when bass is Off.
+  `bassNote` includes its octave.
 - `startBeat` is cumulative across chords.
 - `midiFile` is an absolute path string after a successful write, otherwise `null`.
 - `error` is a string for a file I/O or empty-export failure, otherwise `null`.
@@ -719,13 +754,15 @@ user-supplied paths. All numeric formatting and parsing uses the classic locale.
 `Tests/TheoryTest.cpp` is plain C++ with no JUCE dependency and covers parsing,
 spelling, keys, voicing, and the render plan. `Tests/ProcessorTest.cpp` is a JUCE
 console application covering transport behaviour, note lifecycle, parameters, state
-round-trip, the editor, Regenerate, the Beats column, the drag-file writer and its
-two modes, and MIDI export/read-back. `Tests/ChordPreviewChecks.cpp` is called from
+round-trip, custom chord and bass output, the editor, Regenerate, card tooltips, the
+Beats column, the drag-file writer and its two modes, and MIDI export/read-back.
+`Tests/ChordPreviewChecks.cpp` is called from
 that suite and covers the preview exchange, processor arbitration and resynchronisation,
 cancellation and lifecycle, independent instances, state/file invariance, card hit
-testing, scaling, scrolled gestures, displayed-revision rejection, and editor cleanup.
-`Tests/CliTest.cpp` covers the command-line utility: option parsing, formatting, JSON,
-and REPL state.
+testing, scaling, scrolled gestures, custom chord tooltips, displayed-revision
+rejection, and editor cleanup. `Tests/CliTest.cpp` covers the command-line utility:
+option parsing, custom chords, bass output, MIDI pitch parity, formatting, JSON, and
+REPL state.
 
 Run all three suites through a build script:
 
@@ -745,13 +782,12 @@ Or run the already-built executables directly:
 ./build/Tests/CliTests.exe
 ```
 
-Each executable prints a summary such as `531 checks, 0 failures` for `TheoryTests`,
-`16982 checks, 0 failures` for `ProcessorTests`, and `262 checks, 0 failures` for
-`CliTests`. The processor count varies slightly because one preview stress check
-records how many coalesced publications the reader observed. Each executable returns
-a non-zero exit code if any check fails. The build scripts stop on the first failing
-suite. The build must produce no warnings from project code under JUCE's recommended
-warning flags.
+Recent runs printed `753 checks, 0 failures` for `TheoryTests`, `14938 checks, 0
+failures` for `ProcessorTests`, and `319 checks, 0 failures` for `CliTests`. The
+processor count varies because one preview stress check records how many coalesced
+publications the reader observed. Each executable returns a non-zero exit code if any
+check fails. The build scripts stop on the first failing suite. The build must
+produce no warnings from project code under JUCE's recommended warning flags.
 
 ## Licensing
 
@@ -777,9 +813,10 @@ Known limitations in v1:
 - Parenthesised alterations are unsupported. `Cb5` and `C#5` are read as root
   accidentals before the `5` quality. See
   [SYNTAX.md](SYNTAX.md#36-root-accidental-precedence-cb5).
-- Each upper chord tone sounds once, but a slash bass may duplicate its pitch class
-  an octave below (for example, `C/E`). There is no other octave doubling, and there
-  is no rootless voicing.
+- Ordinary upper chord tones sound once. A slash bass may duplicate its pitch class
+  an octave below (for example, `C/E`). Custom lists can request octave differences,
+  and the optional root bass can add another note. Identical final MIDI pitches
+  sound once. There is no rootless voicing.
 - The Degree column is best-effort for chromatic or ambiguous roots.
 - `prepareToPlay` queues note-offs for pitches that were sounding. It emits them at
   sample 0 of the next block. `releaseResources` cannot emit MIDI, so it only clears
@@ -803,8 +840,9 @@ Known limitations in v1:
   directly.
 - The preview's bar count assumes 4/4 and is informational. The clip itself is
   beat-based, so a host in another meter can still use it.
-- The editor uses a 960×650 base layout with four UI scales from 75% to 150%.
-  Actual host window resizing and mixed-DPI display behavior still require DAW checks.
+- The editor uses a 960×650 base layout with four UI scales from 75% to 150%. The
+  BASS menu sits beside the scale summary. Actual host window resizing and mixed-DPI
+  display behavior still require DAW checks.
 - Host state restore is assumed to run on the message thread. If a host calls
   `setStateInformation` on another thread, the plugin defers the plan rebuild to the
   message queue. The host is still responsible for serialising state changes.
@@ -857,7 +895,7 @@ runs them.
 - [ ] Hold one card and left-press another; release the left button and confirm the
       held chord does not return.
 - [ ] While a chord is held, change key, mode, scale mode, voicing, range, velocity,
-      and Loop one at a time and confirm each cancels the hold without restarting it.
+      bass, and Loop one at a time and confirm each cancels the hold without restarting it.
 - [ ] Start editing the progression text and confirm a held chord stops before the
       150 ms parse.
 - [ ] Bypass, reset processing, save/reload the project, and close/reopen the editor
@@ -878,6 +916,15 @@ runs them.
       stuck notes.
 - [ ] Switch keys and confirm Roman numerals resolve against the selected key while
       absolute chord symbols stay unchanged.
+- [ ] Enter `[1,2,4,5]` in C Major and confirm the card and MIDI output use C, D, F, G.
+- [ ] Enter `[1,3,5,F]`, then change key. Confirm the named F stays F while the
+      scale degrees follow the selected key.
+- [ ] Enter `[F3,1,3,5]` and confirm the first note stays F3 when Range or Voicing changes.
+- [ ] Set BASS to Off, 1, 2, and 3 octaves down. Compare live playback, card preview,
+      held preview, MIDI export, and drag-clip pitches. Check that bass follows the
+      chord root, including when that root is not the lowest chord note.
+- [ ] Save and reload a project with BASS enabled. Confirm the setting is restored.
+      Automate `bassOctaves` and confirm the current preview is cancelled.
 - [ ] Switch among the C2–C5, C3–C6, and C4–C7 ranges and confirm every generated
       note stays within the selected range.
 - [ ] Change velocity and confirm generated notes use the new value.
@@ -891,7 +938,7 @@ runs them.
 - [ ] Confirm the learning table shows the expected degrees and spelled notes for
       the current key and voicing.
 - [ ] Save and reload the project; confirm the text, key, mode, voicing, range,
-      velocity, and loop setting restore.
+      velocity, loop, and bass settings restore.
 - [ ] Confirm the Beats column shows `4` for chords without a `:N` suffix and the
       explicit value for chords with one.
 - [ ] Change the text and press Regenerate; confirm the table updates immediately.

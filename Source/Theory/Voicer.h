@@ -27,4 +27,7 @@ std::vector<int> voiceChord (const Chord& chord,
 
 std::vector<std::vector<int>> voiceProgression (const Progression& progression,
                                                 const VoicingSettings& settings);
+
+// These functions return baseline voices only. Call resolveProgression for
+// custom-note overrides and optional root bass before rendering output.
 }
