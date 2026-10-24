@@ -1,7 +1,7 @@
 # Flexible chord lengths
 
 Date: 2026-10-24
-Status: Draft for approval. Individual decisions below were agreed during brainstorming. The full design has not yet been approved. Product implementation has not started.
+Status: Approved by the user on 2026-10-24, including the Codex decisions. Product implementation has not started.
 
 Builder review: Completed on 2026-10-24. No important unanswered decisions were identified.
 
@@ -200,4 +200,4 @@ DAW routing, live meter-change behavior, automation, and drag acceptance require
 
 ## 12. Next step
 
-A fresh builder review found no important unanswered decisions. The user now reviews the complete design, including the Codex decisions. After approval, prepare a concrete implementation plan. Product implementation follows plan approval.
+A fresh builder review found no important unanswered decisions. The user approved the complete design, including the Codex decisions. Next, review the concrete implementation plan. Product implementation follows plan approval.
