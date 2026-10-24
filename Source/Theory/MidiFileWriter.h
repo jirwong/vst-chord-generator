@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Theory/Length.h"
 #include "Theory/RenderPlan.h"
 
 #include <cstdint>
@@ -15,6 +16,7 @@ struct MidiFileSettings
     bool includeTempoAndTimeSignature = true;
     std::string trackName = "Chord Text";
     int ticksPerQuarterNote = 960;
+    TimeSignature signature {};
 };
 
 std::vector<std::uint8_t> serialiseMidiFile (const RenderPlan& plan,

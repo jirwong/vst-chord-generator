@@ -81,6 +81,24 @@ std::uint64_t decodeHostTimingRevision (std::uint64_t state) noexcept
     return state >> hostTimingRevisionShift;
 }
 
+bool sameLengthSpec (const chordtext::LengthSpec& left,
+                     const chordtext::LengthSpec& right) noexcept
+{
+    return left.unit == right.unit
+        && left.quantity == right.quantity
+        && left.denominator == right.denominator
+        && left.modifier == right.modifier;
+}
+
+bool sameTimingContext (const PublishedTiming& left, const PublishedTiming& right) noexcept
+{
+    return sameLengthSpec (left.settings.defaultLength, right.settings.defaultLength)
+        && left.settings.signature == right.settings.signature
+        && left.hostSignatureAvailable == right.hostSignatureAvailable
+        && left.requestRevision == right.requestRevision
+        && left.hostRevision == right.hostRevision;
+}
+
 // Finds the step whose note-ons have started at or before phase and whose
 // note-offs have not all passed yet. Returns false when no chord is active.
 bool findActiveStep (const chordtext::RenderPlan& plan, double phase,
@@ -702,10 +720,40 @@ void ChordTextAudioProcessor::publishPlan (chordtext::RenderPlan plan,
     writePlanIndex = static_cast<int> (previous & planIndexMask);
 }
 
+bool ChordTextAudioProcessor::ensureCurrentTimingForExport (juce::String& errorMessage)
+{
+    const auto timingBefore = getPublishedTiming();
+    const auto needsRefresh = isPlanRebuildPending()
+                              || exportPlanRequestRevision != timingBefore.requestRevision
+                              || ! sameTimingContext (exportPlanTiming, timingBefore);
+    if (needsRefresh)
+        rebuildPlan();
+
+    const auto timingAfter = getPublishedTiming();
+    if (isPlanRebuildPending()
+        || exportPlanRequestRevision != timingAfter.requestRevision
+        || ! sameTimingContext (exportPlanTiming, timingAfter))
+    {
+        errorMessage = "Timing is updating. Try again.";
+        return false;
+    }
+
+    return true;
+}
+
 bool ChordTextAudioProcessor::writeMidiFile (const juce::File& file, MidiFileMode mode,
                                              juce::String& errorMessage)
 {
     errorMessage.clear();
+
+    if (! diagnostics.empty())
+    {
+        errorMessage = "Cannot export while the progression has errors.";
+        return false;
+    }
+
+    if (! ensureCurrentTimingForExport (errorMessage))
+        return false;
 
     if (! diagnostics.empty())
     {
@@ -719,14 +767,17 @@ bool ChordTextAudioProcessor::writeMidiFile (const juce::File& file, MidiFileMod
         return false;
     }
 
+    const auto plan = exportPlan;
+    const auto timing = exportPlanTiming;
     chordtext::MidiFileSettings settings;
     const auto cachedBpm = lastHostBpm.load (std::memory_order_relaxed);
     settings.bpm = cachedBpm > 0.0 && std::isfinite (cachedBpm) ? cachedBpm : 120.0;
     settings.includeTempoAndTimeSignature = mode == MidiFileMode::exportFile;
+    settings.signature = timing.settings.signature;
 
     std::string error;
     if (! chordtext::writeMidiFile (
-            exportPlan,
+            plan,
             std::filesystem::u8path (file.getFullPathName().toStdString()),
             settings,
             error))

@@ -129,6 +129,9 @@ private:
     enum class MidiFileMode { exportFile, dragClip };
 
     // Message thread only.
+    bool ensureCurrentTimingForExport (juce::String& errorMessage);
+
+    // Message thread only.
     bool writeMidiFile (const juce::File& file, MidiFileMode mode,
                         juce::String& errorMessage);
 

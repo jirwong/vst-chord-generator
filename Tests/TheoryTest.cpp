@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <vector>
 
 using namespace chordtext;
@@ -581,6 +582,81 @@ static void checkResolutionBoundsAndRenderPlan()
     }
 }
 
+static void checkMidiLengthAndMeterMetadata()
+{
+    RenderPlan emptyPlan;
+    MidiFileSettings settings;
+
+    CHECK (containsBytes (serialiseMidiFile (emptyPlan, settings),
+                          {0xFF, 0x58, 0x04, 0x04, 0x02, 0x18, 0x08}));
+
+    for (const auto& expected : std::array<std::array<int, 3>, 3> {{
+             {{3, 4, 2}}, {{6, 8, 3}}, {{7, 8, 3}}
+         }})
+    {
+        settings.signature = {expected[0], expected[1]};
+        CHECK (containsBytes (serialiseMidiFile (emptyPlan, settings),
+                              {0xFF, 0x58, 0x04,
+                               static_cast<std::uint8_t> (expected[0]),
+                               static_cast<std::uint8_t> (expected[2]), 0x18, 0x08}));
+    }
+
+    const auto checkDurationTicks = [] (double durationBeats, int expectedTicks)
+    {
+        RenderPlan plan;
+        plan.events = {{0.0, 60, 100, 1, true, 0},
+                       {durationBeats, 60, 0, 1, false, 0}};
+        const auto events = readNoteEvents (serialiseMidiFile (plan, MidiFileSettings {}));
+        CHECK (events.size() == 2);
+        if (events.size() == 2)
+        {
+            CHECK (events[0].noteOn && events[0].tick == 0);
+            CHECK (! events[1].noteOn && events[1].tick == expectedTicks);
+        }
+    };
+
+    checkDurationTicks (1.0 / 3.0, 320); // 1/8T
+    checkDurationTicks (1.0 / 6.0, 160); // 1/16T
+    checkDurationTicks (3.0, 2880);       // 1/2D
+    checkDurationTicks (3.0, 2880);       // one 6/8 bar
+
+    settings.signature = {6, 8};
+    settings.includeTempoAndTimeSignature = false;
+    const auto dragBytes = serialiseMidiFile (emptyPlan, settings);
+    CHECK (! containsBytes (dragBytes, {0xFF, 0x51}));
+    CHECK (! containsBytes (dragBytes, {0xFF, 0x58}));
+
+    RenderPlan tooShort;
+    tooShort.events = {{0.0, 60, 100, 1, true, 0},
+                       {1.0 / 10000.0, 60, 0, 1, false, 0}};
+    CHECK (serialiseMidiFile (tooShort, MidiFileSettings {}).empty());
+
+    RenderPlan nonFinite;
+    nonFinite.events = {{std::numeric_limits<double>::infinity(), 60, 100, 1, true, 0}};
+    CHECK (serialiseMidiFile (nonFinite, MidiFileSettings {}).empty());
+
+    RenderPlan oversizedDelta;
+    oversizedDelta.events = {{(static_cast<double> (0x10000000u) + 1.0) / 960.0,
+                              60, 100, 1, true, 0}};
+    CHECK (serialiseMidiFile (oversizedDelta, MidiFileSettings {}).empty());
+
+    RenderPlan sameTickBoundary;
+    sameTickBoundary.events = {{1.0004, 60, 0, 1, false, 0},
+                               {1.0003, 62, 100, 1, true, 1}};
+    const auto boundaryEvents = readNoteEvents (
+        serialiseMidiFile (sameTickBoundary, MidiFileSettings {}));
+    CHECK (boundaryEvents.size() == 2);
+    if (boundaryEvents.size() == 2)
+    {
+        CHECK (! boundaryEvents[0].noteOn);
+        CHECK (boundaryEvents[1].noteOn);
+    }
+
+    settings = {};
+    settings.signature = {4, 3};
+    CHECK (serialiseMidiFile (emptyPlan, settings).empty());
+}
+
 int main()
 {
     checkLengthParsingAndResolution();
@@ -590,6 +666,7 @@ int main()
     checkCustomChordResolution();
     checkRootBassResolution();
     checkResolutionBoundsAndRenderPlan();
+    checkMidiLengthAndMeterMetadata();
     CHECK (static_cast<int> (Mode::major) == 0);
     CHECK (static_cast<int> (Mode::minor) == 1);
     CHECK (allModes().size() == 9);

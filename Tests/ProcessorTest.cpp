@@ -166,6 +166,55 @@ static bool readFirstTempo (const juce::File& file, double& secondsPerQuarter)
     return false;
 }
 
+static bool readFirstTimeSignature (const juce::File& file, int& numerator, int& denominator)
+{
+    juce::FileInputStream input (file);
+    if (! input.openedOk())
+        return false;
+
+    juce::MidiFile midiFile;
+    if (! midiFile.readFrom (input))
+        return false;
+
+    for (int track = 0; track < midiFile.getNumTracks(); ++track)
+    {
+        const auto* sequence = midiFile.getTrack (track);
+        for (int index = 0; index < sequence->getNumEvents(); ++index)
+        {
+            const auto message = sequence->getEventPointer (index)->message;
+            if (! message.isTimeSignatureMetaEvent())
+                continue;
+
+            message.getTimeSignatureInfo (numerator, denominator);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static std::vector<double> readFileNoteOffTicks (const juce::File& file)
+{
+    std::vector<double> result;
+    juce::FileInputStream input (file);
+    if (! input.openedOk())
+        return result;
+
+    juce::MidiFile midiFile;
+    if (! midiFile.readFrom (input))
+        return result;
+
+    for (int track = 0; track < midiFile.getNumTracks(); ++track)
+        for (int index = 0; index < midiFile.getTrack (track)->getNumEvents(); ++index)
+        {
+            const auto message = midiFile.getTrack (track)->getEventPointer (index)->message;
+            if (message.isNoteOff())
+                result.push_back (message.getTimeStamp());
+        }
+
+    return result;
+}
+
 static juce::AudioProcessorEditor* createTestEditor (ChordTextAudioProcessor& processor)
 {
     return new ChordTextAudioProcessorEditor (processor, UiSettings {juce::File()});
@@ -374,12 +423,79 @@ static void checkLiveLengthResynchronization()
     }
 }
 
+static void checkPendingTimingExport()
+{
+    const auto directory = juce::File::getCurrentWorkingDirectory()
+                               .getChildFile ("build/Tests/flexible-length-output")
+                               .getChildFile (juce::Uuid().toString());
+    CHECK (directory.createDirectory().wasOk());
+
+    ChordTextAudioProcessor processor;
+    processor.apvts.getParameter ("voicing")->setValueNotifyingHost (1.0f);
+    processor.setProgressionText ("C:1bar");
+
+    FakePlayHead head;
+    head.set (0.0, true, 120.0);
+    head.setTimeSignature (4, 4);
+    processor.setPlayHead (&head);
+    processor.prepareToPlay (48000.0, 512);
+    juce::AudioBuffer<float> audio (0, 512);
+    juce::MidiBuffer midi;
+    processor.processBlock (audio, midi);
+    LengthTimingTestAccess::deliverTimer (processor);
+
+    // The new meter has been observed by processBlock but the timer has not
+    // rebuilt yet. Export must resolve it once rather than write the old 4/4
+    // plan and metadata.
+    head.setTimeSignature (6, 8);
+    processor.processBlock (audio, midi);
+    CHECK (processor.isPlanRebuildPending());
+    const auto callsBeforeExport = head.getPositionCalls();
+    const auto exportFile = directory.getChildFile ("six-eight-export.mid");
+    juce::String error;
+    CHECK (processor.exportMidiFile (exportFile, error));
+    CHECK (error.isEmpty());
+    CHECK (head.getPositionCalls() == callsBeforeExport);
+
+    auto numerator = 0;
+    auto denominator = 0;
+    CHECK (readFirstTimeSignature (exportFile, numerator, denominator));
+    CHECK (numerator == 6 && denominator == 8);
+    const auto noteOffTicks = readFileNoteOffTicks (exportFile);
+    CHECK (! noteOffTicks.empty());
+    for (const auto tick : noteOffTicks)
+        CHECK (tick == 2880.0);
+
+    juce::MemoryBlock writtenBytes;
+    CHECK (exportFile.loadFileAsData (writtenBytes));
+    head.setTimeSignature (3, 4);
+    processor.processBlock (audio, midi);
+    LengthTimingTestAccess::deliverTimer (processor);
+    juce::MemoryBlock afterLaterMeterChange;
+    CHECK (exportFile.loadFileAsData (afterLaterMeterChange));
+    CHECK (afterLaterMeterChange == writtenBytes);
+
+    const auto dragFile = processor.createDragClipFile (error, directory);
+    CHECK (dragFile.existsAsFile());
+    CHECK ((readFileNoteOffTicks (dragFile)
+            == std::vector<double> {2880.0, 2880.0, 2880.0}));
+    CHECK (! readFirstTimeSignature (dragFile, numerator, denominator));
+
+    ChordTextAudioProcessor invalid;
+    invalid.setProgressionText ("H");
+    invalid.apvts.getParameter ("defaultLength")->setValueNotifyingHost (0.0f);
+    const auto invalidFile = directory.getChildFile ("invalid-default-change.mid");
+    CHECK (! invalid.exportMidiFile (invalidFile, error));
+    CHECK (! invalidFile.existsAsFile());
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
     runChordPreviewChecks();
     checkDefaultLengthStateAndHostTiming();
     checkLiveLengthResynchronization();
+    checkPendingTimingExport();
 
     // UI preferences are validated and shared through a local file, not project state.
     {
