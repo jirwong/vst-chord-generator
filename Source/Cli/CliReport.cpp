@@ -1,8 +1,9 @@
 #include "Cli/CliReport.h"
 
 #include "Theory/Chord.h"
+#include "Theory/ChordResolution.h"
+#include "Theory/CustomChordParser.h"
 #include "Theory/Progression.h"
-#include "Theory/Voicer.h"
 
 #include <algorithm>
 #include <charconv>
@@ -167,10 +168,21 @@ CliReport buildReport (std::string_view text, const CliSettings& settings)
     if (! parsed.progression.has_value())
         return report;
 
-    report.valid = true;
-
     const auto& progression = *parsed.progression;
-    const auto voicings = voiceProgression (progression, settings.voicingSettings());
+    const auto resolution = resolveProgression (progression, settings.voicingSettings(),
+                                                settings.bassOctaves);
+    if (! resolution.chords.has_value())
+    {
+        report.diagnostics.insert (report.diagnostics.end(), resolution.diagnostics.begin(),
+                                   resolution.diagnostics.end());
+        return report;
+    }
+
+    report.valid = true;
+    std::vector<std::vector<int>> voicings;
+    voicings.reserve (resolution.chords->size());
+    for (const auto& chord : *resolution.chords)
+        voicings.push_back (chord.pitches);
     report.plan = buildRenderPlan (progression, voicings, settings.velocity);
 
     report.chords.reserve (progression.steps.size());
@@ -189,10 +201,32 @@ CliReport buildReport (std::string_view text, const CliSettings& settings)
         for (const auto& tone : step.chord.tones())
             row.spelledTones.push_back (tone.name());
 
-        row.voicing = voicings[index];
+        row.voicing = resolution.chords->at (index).pitches;
+        row.bassMidi = resolution.chords->at (index).bassMidi;
+
+        const auto& rootSpelling = step.chord.spec().customNotes.has_value()
+            ? step.chord.spec().customNotes->front().pitchClass : step.chord.spec().root;
+        if (row.bassMidi.has_value())
+            row.bassNote = voicedNoteName (rootSpelling, *row.bassMidi);
 
         for (const auto pitch : row.voicing)
-            row.notes.push_back (noteNameForPitch (step.chord, pitch));
+        {
+            if (step.chord.spec().customNotes.has_value())
+            {
+                const auto tone = std::find_if (step.chord.tones().begin(), step.chord.tones().end(),
+                    [pitch] (const PitchClass& spelling)
+                    {
+                        return (spelling.semitone() % 12 + 12) % 12
+                            == (pitch % 12 + 12) % 12;
+                    });
+                row.notes.push_back (tone == step.chord.tones().end()
+                    ? noteNameForPitch (step.chord, pitch) : voicedNoteName (*tone, pitch));
+            }
+            else
+            {
+                row.notes.push_back (noteNameForPitch (step.chord, pitch));
+            }
+        }
 
         row.startBeat = startBeat;
         row.durationBeats = step.durationBeats;
@@ -237,20 +271,25 @@ std::string formatHuman (const CliReport& report)
     }
     else
     {
-        const std::vector<std::string> headers { "Chord", "Degree", "Notes", "Beats", "MIDI" };
+        std::vector<std::string> headers { "Chord", "Degree", "Notes", "Beats", "MIDI" };
+        if (report.settings.bassOctaves > 0)
+            headers.push_back ("Bass");
 
         std::vector<std::vector<std::string>> cells;
         cells.reserve (report.chords.size());
 
         for (const auto& row : report.chords)
         {
-            cells.push_back ({
+            auto cellsForRow = std::vector<std::string> {
                 row.symbol,
                 row.degree,
                 joinStrings (row.notes),
                 formatNumber (row.durationBeats),
                 joinInts (row.voicing)
-            });
+            };
+            if (report.settings.bassOctaves > 0)
+                cellsForRow.push_back (row.bassNote.value_or ("-"));
+            cells.push_back (std::move (cellsForRow));
         }
 
         std::vector<std::size_t> widths (headers.size(), 0);
@@ -322,7 +361,8 @@ std::string formatJson (const CliReport& report)
     appendJsonString (out, report.settings.rangeName());
     out += ",\n";
     out += "    \"velocity\": " + std::to_string (report.settings.velocity) + ",\n";
-    out += "    \"bpm\": " + formatNumber (report.settings.bpm) + "\n";
+    out += "    \"bpm\": " + formatNumber (report.settings.bpm) + ",\n";
+    out += "    \"bassOctaves\": " + std::to_string (report.settings.bassOctaves) + "\n";
     out += "  },\n";
 
     out += "  \"valid\": ";
@@ -393,6 +433,18 @@ std::string formatJson (const CliReport& report)
             out += ",\n";
             out += "      \"voicing\": ";
             appendJsonIntList (out, chord.voicing);
+            out += ",\n";
+            out += "      \"bassMidi\": ";
+            if (chord.bassMidi.has_value())
+                out += std::to_string (*chord.bassMidi);
+            else
+                out += "null";
+            out += ",\n";
+            out += "      \"bassNote\": ";
+            if (chord.bassNote.has_value())
+                appendJsonString (out, *chord.bassNote);
+            else
+                out += "null";
             out += ",\n";
             out += "      \"startBeat\": " + formatNumber (chord.startBeat) + ",\n";
             out += "      \"durationBeats\": " + formatNumber (chord.durationBeats) + "\n";

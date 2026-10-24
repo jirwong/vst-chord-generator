@@ -6,11 +6,78 @@
 #include "Cli/CliSession.h"
 #include "Cli/CliSettings.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 
 using namespace chordtext;
 using namespace chordtext::cli;
+
+namespace
+{
+int readMidiU32 (const std::vector<std::uint8_t>& bytes, std::size_t offset)
+{
+    return (int (bytes[offset]) << 24) | (int (bytes[offset + 1]) << 16)
+         | (int (bytes[offset + 2]) << 8) | int (bytes[offset + 3]);
+}
+
+int readMidiVlq (const std::vector<std::uint8_t>& bytes, std::size_t& offset)
+{
+    int value = 0;
+    for (;;)
+    {
+        const auto byte = bytes[offset++];
+        value = (value << 7) | (byte & 0x7F);
+        if ((byte & 0x80) == 0)
+            return value;
+    }
+}
+
+std::vector<int> readMidiNoteOnPitches (const std::filesystem::path& path)
+{
+    std::ifstream input (path, std::ios::binary);
+    const std::vector<std::uint8_t> bytes { std::istreambuf_iterator<char> (input),
+                                           std::istreambuf_iterator<char>() };
+    std::vector<int> result;
+    if (bytes.size() < 22)
+        return result;
+
+    auto offset = std::size_t (8 + readMidiU32 (bytes, 4) + 8);
+    const auto trackEnd = offset - 8 + std::size_t (8 + readMidiU32 (bytes, offset - 4));
+    int runningStatus = 0;
+    while (offset < trackEnd)
+    {
+        readMidiVlq (bytes, offset);
+        auto status = bytes[offset++];
+        if (status < 0x80)
+        {
+            --offset;
+            status = static_cast<std::uint8_t> (runningStatus);
+        }
+        else
+        {
+            runningStatus = status;
+        }
+
+        if (status == 0xFF)
+        {
+            ++offset;
+            offset += static_cast<std::size_t> (readMidiVlq (bytes, offset));
+            continue;
+        }
+
+        const auto kind = status & 0xF0;
+        const auto pitch = int (bytes[offset++]);
+        const auto velocity = (kind == 0xC0 || kind == 0xD0)
+            ? 0 : int (bytes[offset++]);
+        if (kind == 0x90 && velocity > 0)
+            result.push_back (pitch);
+    }
+
+    return result;
+}
+}
 
 int main()
 {
@@ -22,12 +89,13 @@ int main()
     CHECK (defaults.velocity == 100);
     CHECK (defaults.bpm == 120.0);
     CHECK (! defaults.json);
+    CHECK (defaults.bassOctaves == 0);
     CHECK (defaults.keyName() == "C");
     CHECK (defaults.modeName() == "major");
     CHECK (defaults.voicingName() == "voice-led");
     CHECK (defaults.rangeName() == "C3-C6");
     CHECK (formatSettingsLine (defaults)
-           == "Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100");
+           == "Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off");
 
     const auto midiSettings = defaults.midiFileSettings();
     CHECK (midiSettings.bpm == 120.0);
@@ -86,6 +154,14 @@ int main()
     CHECK (! parseBpm ("3.9").has_value());
     CHECK (! parseBpm ("1000").has_value());
     CHECK (! parseBpm ("nan").has_value());
+    CHECK (parseBassOctaves ("off") == std::optional<int> { 0 });
+    CHECK (parseBassOctaves ("OFF") == std::optional<int> { 0 });
+    CHECK (parseBassOctaves ("1") == std::optional<int> { 1 });
+    CHECK (parseBassOctaves ("2") == std::optional<int> { 2 });
+    CHECK (parseBassOctaves ("3") == std::optional<int> { 3 });
+    CHECK (! parseBassOctaves ("0").has_value());
+    CHECK (! parseBassOctaves ("4").has_value());
+    CHECK (! parseBassOctaves ("-1").has_value());
 
     auto parsed = parseOptions ({});
     CHECK (parsed.status == CliParseStatus::ok);
@@ -108,6 +184,13 @@ int main()
     CHECK (parsed.options.settings.json);
     CHECK (parsed.options.outputPath == std::optional<std::string> { "loop" });
 
+    parsed = parseOptions ({ "--bass", "2", "C" });
+    CHECK (parsed.status == CliParseStatus::ok);
+    CHECK (parsed.options.settings.bassOctaves == 2);
+    parsed = parseOptions ({ "--bass=off", "C" });
+    CHECK (parsed.status == CliParseStatus::ok);
+    CHECK (parsed.options.settings.bassOctaves == 0);
+
     parsed = parseOptions ({ "--key", "C", "--key", "D" });
     CHECK (parsed.options.settings.keyName() == "D");
 
@@ -124,7 +207,10 @@ int main()
         { "C", "D" },
         { "--json=on" },
         { "--velocity", "0" },
-        { "--bpm", "3.9" }
+        { "--bpm", "3.9" },
+        { "--bass", "0" },
+        { "--bass", "4" },
+        { "--bass" }
     };
 
     for (const auto& args : usageErrors)
@@ -150,6 +236,7 @@ int main()
     CHECK (! helpText().empty());
     CHECK (helpText().find ("--key") != std::string::npos);
     CHECK (helpText().find ("--out") != std::string::npos);
+    CHECK (helpText().find ("--bass") != std::string::npos);
     CHECK (helpText().find ("chordtext-cli") != std::string::npos);
     CHECK (helpText().find ("  1  progression parse errors") != std::string::npos);
     CHECK (helpText().find ("  2  usage error") != std::string::npos);
@@ -184,7 +271,7 @@ int main()
 
     const std::string expectedHuman =
         "Progression: Cmaj7:2, Am7\n"
-        "Key: C major · Voicing: root-position · Range: C2-C5 · Velocity: 100\n"
+        "Key: C major · Voicing: root-position · Range: C2-C5 · Velocity: 100 · Bass: Off\n"
         "\n"
         "Chord  Degree  Notes    Beats  MIDI\n"
         "Cmaj7  Imaj7   C E G B  2      36 40 43 47\n"
@@ -196,12 +283,41 @@ int main()
     CHECK (invalid.diagnostics.size() == 2);
     const std::string expectedInvalid =
         "Progression: C, H, C99\n"
-        "Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100\n"
+        "Key: C major · Voicing: voice-led · Range: C3-C6 · Velocity: 100 · Bass: Off\n"
         "\n"
         "2 errors:\n"
         "Error at character 3: unknown chord root (H)\n"
         "Error at character 6: unknown extension \"9\" (C99)\n";
     CHECK (formatHuman (invalid) == expectedInvalid);
+
+    CliSettings bassSettings = tableSettings;
+    bassSettings.bassOctaves = 1;
+    const auto bassReport = buildReport ("Cmaj7", bassSettings);
+    CHECK (bassReport.valid);
+    CHECK (bassReport.chords[0].bassMidi == std::optional<int> { 24 });
+    CHECK (bassReport.chords[0].bassNote == std::optional<std::string> { "C1" });
+    CHECK ((bassReport.chords[0].voicing == std::vector<int> { 24, 36, 40, 43, 47 }));
+    CHECK ((bassReport.chords[0].notes
+            == std::vector<std::string> { "C", "C", "E", "G", "B" }));
+    CHECK (formatHuman (bassReport).find ("C1") != std::string::npos);
+    CHECK (formatHuman (bassReport).find ("Bass") != std::string::npos);
+    const auto bassJson = formatJson (bassReport);
+    CHECK (bassJson.find ("\"bassOctaves\": 1") != std::string::npos);
+    CHECK (bassJson.find ("\"bassMidi\": 24") != std::string::npos);
+    CHECK (bassJson.find ("\"bassNote\": \"C1\"") != std::string::npos);
+    const auto invalidBass = buildReport ("[C-1]", bassSettings);
+    CHECK (! invalidBass.valid);
+    CHECK (invalidBass.chords.empty());
+    CHECK (invalidBass.plan.events.empty());
+    CHECK (! invalidBass.diagnostics.empty());
+
+    const auto customReport = buildReport ("[1,2,4,5]:2", tableSettings);
+    CHECK (customReport.valid);
+    CHECK (customReport.chords[0].symbol == "C custom");
+    CHECK (customReport.chords[0].degree == "custom");
+    CHECK ((customReport.chords[0].notes
+            == std::vector<std::string> { "C2", "D2", "F2", "G2" }));
+    CHECK (customReport.chords[0].durationBeats == 2.0);
 
     const auto singleError = buildReport ("C, H", CliSettings {});
     CHECK (formatHuman (singleError).find ("1 error:\n") != std::string::npos);
@@ -247,6 +363,8 @@ int main()
     CHECK (humanJson.find ("\"range\": \"C2-C5\"") != std::string::npos);
     CHECK (humanJson.find ("\"velocity\": 100") != std::string::npos);
     CHECK (humanJson.find ("\"bpm\": 120") != std::string::npos);
+    CHECK (humanJson.find ("\"bassOctaves\": 0") != std::string::npos);
+    CHECK (humanJson.find ("\"bassMidi\": null") != std::string::npos);
     CHECK (humanJson.find ("\"source\": \"Cmaj7\"") != std::string::npos);
     CHECK (humanJson.find ("\"spelledTones\": [\"C\", \"E\", \"G\", \"B\"]")
            != std::string::npos);
@@ -305,12 +423,20 @@ int main()
     CHECK (output.feedback.find ("Error") != std::string::npos);
     CHECK (session.settings().velocity == 100);
 
+    output = session.handleLine (":bass 2");
+    CHECK (output.feedback.find ("Bass: 2 octaves down") != std::string::npos);
+    CHECK (session.settings().bassOctaves == 2);
+    output = session.handleLine (":bass 4");
+    CHECK (output.feedback.find ("Error") != std::string::npos);
+    CHECK (session.settings().bassOctaves == 2);
+
     output = session.handleLine (":nope");
     CHECK (output.feedback.find ("Unknown command") != std::string::npos);
 
     output = session.handleLine (":help");
     CHECK (output.feedback.find (":key") != std::string::npos);
     CHECK (output.feedback.find (":export") != std::string::npos);
+    CHECK (output.feedback.find (":bass") != std::string::npos);
 
     session.handleLine (":json on");
     output = session.handleLine ("Cmaj7");
@@ -343,6 +469,13 @@ int main()
     output = exporter.handleLine (":export " + (temp / "last").string());
     CHECK (std::filesystem::exists (temp / "last.mid"));
     std::filesystem::remove (temp / "last.mid");
+
+    exporter.handleLine ("[C-1,1,3,5]");
+    exporter.handleLine (":bass 1");
+    output = exporter.handleLine (":export " + (temp / "bounds").string());
+    CHECK (output.feedback.find ("Cannot export") != std::string::npos);
+    CHECK (! std::filesystem::exists (temp / "bounds.mid"));
+    exporter.handleLine (":bass off");
 
     output = exporter.handleLine (":export " + (temp / "out file").string());
     CHECK (output.feedback.find ("Wrote") != std::string::npos);
@@ -416,10 +549,35 @@ int main()
     CHECK (run.standardError.empty());
     oneShot.settings.json = false;
 
+    oneShot.settings.bassOctaves = 1;
+    run = runOneShot ("[1,3,5,F]", oneShot);
+    CHECK (run.exitCode == 0);
+    CHECK (run.standardOutput.find ("C custom") != std::string::npos);
+    oneShot.settings = CliSettings {};
+
     const auto runTemp = std::filesystem::temp_directory_path()
                              / "chordtext-cli-run-test";
     std::filesystem::remove_all (runTemp);
     std::filesystem::create_directories (runTemp);
+
+    oneShot.settings.bassOctaves = 1;
+    oneShot.outputPath = (runTemp / "invalid-bass").string();
+    run = runOneShot ("[C-1]", oneShot);
+    CHECK (run.exitCode == 1);
+    CHECK (! std::filesystem::exists (runTemp / "invalid-bass.mid"));
+    oneShot.settings = CliSettings {};
+
+    CliOptions parityOptions;
+    parityOptions.settings.bassOctaves = 1;
+    parityOptions.outputPath = (runTemp / "parity").string();
+    const auto parityText = "[C5,E4,G4]:2";
+    const auto parityReport = buildReport (parityText, parityOptions.settings);
+    run = runOneShot (parityText, parityOptions);
+    CHECK (run.exitCode == 0);
+    CHECK ((parityReport.chords[0].voicing == std::vector<int> { 60, 64, 67, 72 }));
+    CHECK ((readMidiNoteOnPitches (runTemp / "parity.mid")
+            == parityReport.chords[0].voicing));
+    std::filesystem::remove (runTemp / "parity.mid");
 
     oneShot.outputPath = (runTemp / "one-shot").string();
     run = runOneShot ("C, F, G", oneShot);

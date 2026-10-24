@@ -86,10 +86,15 @@ std::string CliSettings::rangeName() const
 
 std::string formatSettingsLine (const CliSettings& settings)
 {
+    const auto bass = settings.bassOctaves == 0 ? "Off"
+                    : std::to_string (settings.bassOctaves)
+                        + (settings.bassOctaves == 1 ? " octave down" : " octaves down");
+
     return "Key: " + settings.keyName() + " " + settings.modeName()
          + " · Voicing: " + settings.voicingName()
          + " · Range: " + settings.rangeName()
-         + " · Velocity: " + std::to_string (settings.velocity);
+         + " · Velocity: " + std::to_string (settings.velocity)
+         + " · Bass: " + bass;
 }
 
 std::optional<PitchClass> parseTonic (std::string_view text)
@@ -171,5 +176,18 @@ std::optional<double> parseBpm (std::string_view text)
     if (value < 4.0 || value > 999.0)
         return std::nullopt;
     return value;
+}
+
+std::optional<int> parseBassOctaves (std::string_view text)
+{
+    if (equalsIgnoreCase (text, "off"))
+        return 0;
+    if (text == "1")
+        return 1;
+    if (text == "2")
+        return 2;
+    if (text == "3")
+        return 3;
+    return std::nullopt;
 }
 }

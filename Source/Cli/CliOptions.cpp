@@ -139,6 +139,16 @@ CliParseResult parseOptions (const std::vector<std::string>& args)
                     return invalid ("--bpm", value);
                 options.settings.bpm = *bpm;
             }
+            else if (name == "--bass")
+            {
+                std::string value;
+                if (! requireValue (value))
+                    return CliParseResult { CliParseStatus::usageError, {}, "Missing value for --bass" };
+                const auto bassOctaves = parseBassOctaves (value);
+                if (! bassOctaves.has_value())
+                    return invalid ("--bass", value);
+                options.settings.bassOctaves = *bassOctaves;
+            }
             else if (name == "--out")
             {
                 std::string value;
@@ -183,6 +193,7 @@ std::string helpText()
         "                       Default: C3-C6.\n"
         "  --velocity <n>       Note velocity 1..127. Default: 100.\n"
         "  --bpm <n>            Tempo 4.0..999.0. Default: 120.\n"
+        "  --bass <off|1|2|3>   Add the root 1, 2, or 3 octaves down. Default: off.\n"
         "  --json               Emit JSON output instead of a report.\n"
         "  --out <path>         Output MIDI file path.\n"
         "  --help               Show this help and exit.\n"
