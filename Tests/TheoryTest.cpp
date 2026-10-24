@@ -1,6 +1,7 @@
 #include "Check.h"
 #include "Theory/Chord.h"
 #include "Theory/ChordSymbolParser.h"
+#include "Theory/ChordResolution.h"
 #include "Theory/CustomChordParser.h"
 #include "Theory/Key.h"
 #include "Theory/NumericDegreeParser.h"
@@ -245,10 +246,181 @@ static void checkCustomGrammarDiagnostics()
     CHECK (! aboveMidi.spec && ! aboveMidi.diagnostics.empty());
 }
 
+static void checkCustomChordResolution()
+{
+    const Key cMajor {{'C', 0}, Mode::major};
+    VoicingSettings rootPosition;
+    rootPosition.mode = VoicingMode::rootPosition;
+
+    const auto octaveStack = parseProgression ("[1@-1,1,8]", cMajor);
+    const auto octaveResult = resolveProgression (*octaveStack.progression, rootPosition, 0);
+    CHECK (octaveResult.chords && octaveResult.chords->size() == 1);
+    if (octaveResult.chords)
+    {
+        CHECK (((*octaveResult.chords)[0].chordPitches == std::vector<int> {36, 48, 60}));
+        CHECK ((*octaveResult.chords)[0].rootMidi == 36);
+    }
+
+    const auto pinnedRoot = parseProgression ("[F3,1,3,5]", cMajor);
+    const auto pinnedResult = resolveProgression (*pinnedRoot.progression, rootPosition, 1);
+    CHECK (pinnedResult.chords && pinnedResult.chords->size() == 1);
+    if (pinnedResult.chords)
+    {
+        CHECK ((*pinnedResult.chords)[0].rootMidi == 53);
+        CHECK ((*pinnedResult.chords)[0].bassMidi == std::optional<int> {41});
+        CHECK (((*pinnedResult.chords)[0].pitches == std::vector<int> {41, 53, 55, 60, 64}));
+    }
+
+    const auto rootIsRaisedEntry = parseProgression ("[8,1]", cMajor);
+    const auto raisedResult = resolveProgression (*rootIsRaisedEntry.progression, rootPosition, 0);
+    CHECK (raisedResult.chords && raisedResult.chords->size() == 1);
+    if (raisedResult.chords)
+    {
+        CHECK (((*raisedResult.chords)[0].chordPitches == std::vector<int> {48, 60}));
+        CHECK ((*raisedResult.chords)[0].rootMidi == 60);
+    }
+
+    const std::array<std::pair<int, int>, 3> ranges {{{36, 72}, {48, 84}, {60, 96}}};
+    const auto progression = parseProgression ("[1,3,5], [2,4,6]", cMajor);
+    for (const auto mode : {VoicingMode::rootPosition, VoicingMode::voiceLed})
+        for (const auto range : ranges)
+        {
+            VoicingSettings settings {mode, range.first, range.second};
+            const auto resolved = resolveProgression (*progression.progression, settings, 0);
+            const auto baseline = voiceProgression (*progression.progression, settings);
+            CHECK (resolved.chords && resolved.chords->size() == baseline.size());
+            if (resolved.chords)
+                for (std::size_t index = 0; index < baseline.size(); ++index)
+                    CHECK ((*resolved.chords)[index].chordPitches == baseline[index]);
+        }
+
+    const auto withOffsets = parseProgression ("[1@+1], [2@+1]", cMajor);
+    const auto withoutOffsets = parseProgression ("[1], [2]", cMajor);
+    VoicingSettings voiceLed;
+    const auto shifted = resolveProgression (*withOffsets.progression, voiceLed, 0);
+    const auto baseline = resolveProgression (*withoutOffsets.progression, voiceLed, 0);
+    const auto bassEnabled = resolveProgression (*withOffsets.progression, voiceLed, 1);
+    CHECK (shifted.chords && baseline.chords && shifted.chords->size() == 2);
+    if (shifted.chords && baseline.chords)
+        for (std::size_t index = 0; index < 2; ++index)
+        {
+            CHECK ((*shifted.chords)[index].rootMidi == (*baseline.chords)[index].rootMidi + 12);
+            CHECK ((*shifted.chords)[index].chordPitches.front()
+                   == (*baseline.chords)[index].chordPitches.front() + 12);
+        }
+    CHECK (shifted.chords && bassEnabled.chords
+           && shifted.chords->size() == bassEnabled.chords->size());
+    if (shifted.chords && bassEnabled.chords)
+        for (std::size_t index = 0; index < shifted.chords->size(); ++index)
+            CHECK (((*shifted.chords)[index].chordPitches
+                    == (*bassEnabled.chords)[index].chordPitches));
+}
+
+static void checkRootBassResolution()
+{
+    const Key cMajor {{'C', 0}, Mode::major};
+    VoicingSettings rootPosition;
+    rootPosition.mode = VoicingMode::rootPosition;
+    const auto pinned = parseProgression ("[C5,E4,G4]:2", cMajor);
+    for (int octaves = 1; octaves <= 3; ++octaves)
+    {
+        const auto resolved = resolveProgression (*pinned.progression, rootPosition, octaves);
+        CHECK (resolved.chords && resolved.chords->size() == 1);
+        if (resolved.chords)
+        {
+            const auto expectedBass = 72 - 12 * octaves;
+            CHECK ((*resolved.chords)[0].bassMidi == std::optional<int> {expectedBass});
+            if (octaves == 1)
+                CHECK (((*resolved.chords)[0].pitches == std::vector<int> {60, 64, 67, 72}));
+        }
+    }
+
+    const auto duplicateBass = parseProgression ("[C4,C3]", cMajor);
+    const auto duplicateResult = resolveProgression (*duplicateBass.progression, rootPosition, 1);
+    CHECK (duplicateResult.chords && duplicateResult.chords->size() == 1);
+    if (duplicateResult.chords)
+    {
+        CHECK (((*duplicateResult.chords)[0].pitches == std::vector<int> {48, 60}));
+        CHECK ((*duplicateResult.chords)[0].bassMidi == std::optional<int> {48});
+    }
+
+    const auto ordinary = parseProgression ("C/E, Fm7/C", cMajor);
+    const auto ordinaryOff = resolveProgression (*ordinary.progression, rootPosition, 0);
+    const auto ordinaryOn = resolveProgression (*ordinary.progression, rootPosition, 1);
+    const auto ordinaryBaseline = voiceProgression (*ordinary.progression, rootPosition);
+    CHECK (ordinaryOff.chords && ordinaryOn.chords
+           && ordinaryOff.chords->size() == ordinaryBaseline.size());
+    if (ordinaryOff.chords && ordinaryOn.chords)
+        for (std::size_t index = 0; index < ordinaryBaseline.size(); ++index)
+        {
+            CHECK ((*ordinaryOff.chords)[index].chordPitches == ordinaryBaseline[index]);
+            CHECK ((*ordinaryOn.chords)[index].chordPitches == ordinaryBaseline[index]);
+        }
+    CHECK (ordinaryOn.chords && (*ordinaryOn.chords)[0].bassMidi
+           && (*ordinaryOn.chords)[0].bassMidi != std::optional<int> {ordinaryBaseline[0].front()});
+
+    const auto exactBounds = parseProgression ("[C-1], [G9]", cMajor);
+    const auto exactResult = resolveProgression (*exactBounds.progression, rootPosition, 0);
+    CHECK ((exactResult.chords && (*exactResult.chords)[0].pitches == std::vector<int> {0}
+           && (*exactResult.chords)[1].pitches == std::vector<int> {127}));
+
+    const auto highRoot = parseProgression ("[G9,14]", cMajor);
+    const auto highResult = resolveProgression (*highRoot.progression, rootPosition, 0);
+    CHECK ((highResult.chords && (*highResult.chords)[0].rootMidi == 127
+           && (*highResult.chords)[0].chordPitches == std::vector<int> {71, 127}));
+
+    const auto empty = parseProgression ("", cMajor);
+    const auto emptyResult = resolveProgression (*empty.progression, rootPosition, 0);
+    const auto invalidBass = resolveProgression (*empty.progression, rootPosition, 4);
+    CHECK (emptyResult.chords && emptyResult.chords->empty());
+    CHECK (! invalidBass.chords && ! invalidBass.diagnostics.empty());
+}
+
+static void checkResolutionBoundsAndRenderPlan()
+{
+    const Key cMajor {{'C', 0}, Mode::major};
+    VoicingSettings rootPosition;
+    rootPosition.mode = VoicingMode::rootPosition;
+
+    const auto bassOverflow = parseProgression ("[C-1]", cMajor);
+    const auto bassError = resolveProgression (*bassOverflow.progression, rootPosition, 1);
+    CHECK (! bassError.chords && ! bassError.diagnostics.empty());
+
+    rootPosition.lowMidi = 120;
+    rootPosition.highMidi = 127;
+    const auto relativeOverflow = parseProgression ("[1@+1]", cMajor);
+    const auto relativeError = resolveProgression (*relativeOverflow.progression, rootPosition, 0);
+    CHECK (! relativeError.chords && ! relativeError.diagnostics.empty());
+    if (! relativeError.diagnostics.empty())
+        CHECK (relativeError.diagnostics[0].offset == 1);
+
+    rootPosition.lowMidi = 48;
+    rootPosition.highMidi = 84;
+    const auto parsed = parseProgression ("[C5,E4,G4]:2", cMajor);
+    const auto resolved = resolveProgression (*parsed.progression, rootPosition, 1);
+    CHECK (resolved.chords && resolved.chords->size() == 1);
+    if (resolved.chords)
+    {
+        const std::vector<std::vector<int>> voicings {(*resolved.chords)[0].pitches};
+        const auto plan = buildRenderPlan (*parsed.progression, voicings, 83);
+        CHECK (plan.lengthBeats == 2.0);
+        CHECK (plan.events.size() == 8);
+        const auto bytes = serialiseMidiFile (plan, MidiFileSettings {});
+        const auto events = readNoteEvents (bytes);
+        CHECK (events.size() == 8);
+        CHECK (events.front().noteOn && events.front().pitch == 60
+               && events.front().velocity == 83 && events.front().channel == 1);
+        CHECK (! events[4].noteOn && events[4].tick == 1920);
+    }
+}
+
 int main()
 {
     checkCustomChordParsing();
     checkCustomGrammarDiagnostics();
+    checkCustomChordResolution();
+    checkRootBassResolution();
+    checkResolutionBoundsAndRenderPlan();
     CHECK (static_cast<int> (Mode::major) == 0);
     CHECK (static_cast<int> (Mode::minor) == 1);
     CHECK (allModes().size() == 9);

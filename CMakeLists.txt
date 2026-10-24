@@ -25,6 +25,7 @@ set(THEORY_SOURCES
     Source/Theory/NumericDegreeParser.cpp
     Source/Theory/Progression.cpp
     Source/Theory/Voicer.cpp
+    Source/Theory/ChordResolution.cpp
     Source/Theory/RenderPlan.cpp
     Source/Theory/MidiFileWriter.cpp)
 set(CLI_CORE_SOURCES
