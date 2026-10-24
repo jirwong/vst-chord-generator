@@ -162,7 +162,7 @@ CliReport buildReport (std::string_view text, const CliSettings& settings)
     report.settings = settings;
 
     const auto key = settings.key();
-    const auto parsed = parseProgression (report.text, key);
+    const auto parsed = parseProgression (report.text, key, settings.timingSettings());
     report.diagnostics = parsed.diagnostics;
 
     if (! parsed.progression.has_value())
@@ -240,6 +240,8 @@ CliReport buildReport (std::string_view text, const CliSettings& settings)
 
         row.startBeat = startBeat;
         row.durationBeats = step.durationBeats;
+        row.lengthExpression = step.lengthExpression;
+        row.usesDefaultLength = step.usesDefaultLength;
         startBeat += step.durationBeats;
 
         report.chords.push_back (std::move (row));
@@ -281,7 +283,7 @@ std::string formatHuman (const CliReport& report)
     }
     else
     {
-        std::vector<std::string> headers { "Chord", "Degree", "Notes", "Beats", "MIDI" };
+        std::vector<std::string> headers { "Chord", "Degree", "Notes", "Length", "Beats", "MIDI" };
         if (report.settings.bassOctaves > 0)
             headers.push_back ("Bass");
 
@@ -294,6 +296,7 @@ std::string formatHuman (const CliReport& report)
                 row.symbol,
                 row.degree,
                 joinStrings (row.notes),
+                row.lengthExpression,
                 formatNumber (row.durationBeats),
                 joinInts (row.voicing)
             };
@@ -372,7 +375,14 @@ std::string formatJson (const CliReport& report)
     out += ",\n";
     out += "    \"velocity\": " + std::to_string (report.settings.velocity) + ",\n";
     out += "    \"bpm\": " + formatNumber (report.settings.bpm) + ",\n";
-    out += "    \"bassOctaves\": " + std::to_string (report.settings.bassOctaves) + "\n";
+    out += "    \"bassOctaves\": " + std::to_string (report.settings.bassOctaves) + ",\n";
+    out += "    \"defaultLength\": ";
+    appendJsonString (out, formatLength (report.settings.defaultLength));
+    out += ",\n";
+    out += "    \"timeSignature\": {\"numerator\": "
+        + std::to_string (report.settings.timeSignature.numerator)
+        + ", \"denominator\": " + std::to_string (report.settings.timeSignature.denominator)
+        + "}\n";
     out += "  },\n";
 
     out += "  \"valid\": ";
@@ -457,7 +467,12 @@ std::string formatJson (const CliReport& report)
                 out += "null";
             out += ",\n";
             out += "      \"startBeat\": " + formatNumber (chord.startBeat) + ",\n";
-            out += "      \"durationBeats\": " + formatNumber (chord.durationBeats) + "\n";
+            out += "      \"durationBeats\": " + formatNumber (chord.durationBeats) + ",\n";
+            out += "      \"lengthExpression\": ";
+            appendJsonString (out, chord.lengthExpression);
+            out += ",\n";
+            out += "      \"usesDefaultLength\": ";
+            out += chord.usesDefaultLength ? "true\n" : "false\n";
             out += "    }";
 
             if (i + 1 != report.chords.size())

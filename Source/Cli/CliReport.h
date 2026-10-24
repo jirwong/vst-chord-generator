@@ -23,6 +23,8 @@ struct CliChordRow
     std::optional<std::string> bassNote;
     double startBeat = 0.0;
     double durationBeats = 4.0;
+    std::string lengthExpression;
+    bool usesDefaultLength = true;
 };
 
 struct CliReport

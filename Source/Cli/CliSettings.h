@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Theory/Key.h"
+#include "Theory/Length.h"
 #include "Theory/MidiFileWriter.h"
 #include "Theory/Note.h"
 #include "Theory/Voicer.h"
@@ -21,9 +22,12 @@ struct CliSettings
     double bpm = 120.0;
     bool json = false;
     int bassOctaves = 0;
+    LengthSpec defaultLength {};
+    TimeSignature timeSignature {};
 
     Key key() const;
     VoicingSettings voicingSettings() const;
+    TimingSettings timingSettings() const;
     MidiFileSettings midiFileSettings() const;
     std::string keyName() const;
     std::string modeName() const;
