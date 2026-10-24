@@ -52,6 +52,38 @@ juce::String formatBeats (double beats)
     return text;
 }
 
+juce::String formatCardTiming (const LearningRow& row)
+{
+    const auto expression = row.lengthExpression.isNotEmpty() ? row.lengthExpression
+                                                               : juce::String ("4beats");
+    const auto displayExpression = [&]
+    {
+        for (const auto suffix : {juce::String ("beats"), juce::String ("beat"),
+                                  juce::String ("bars"), juce::String ("bar")})
+        {
+            if (expression.endsWithIgnoreCase (suffix))
+            {
+                const auto prefix = expression.dropLastCharacters (suffix.length());
+                return prefix + " " + suffix.toUpperCase();
+            }
+        }
+
+        return expression.toUpperCase();
+    }();
+    const auto beatText = juce::String::fromUTF8 (
+        chordtext::formatBeatCount (row.durationBeats).c_str());
+    return (row.usesDefaultLength ? juce::String ("DEFAULT  \xc2\xb7 ") : juce::String())
+           + displayExpression + juce::String::fromUTF8 ("  \xc2\xb7  ")
+           + beatText.toUpperCase();
+}
+
+juce::String formatTimingContext (const PublishedTiming& timing)
+{
+    const auto signature = juce::String (timing.settings.signature.numerator) + "/"
+                         + juce::String (timing.settings.signature.denominator);
+    return timing.hostSignatureAvailable ? signature + " host" : signature + " fallback";
+}
+
 void drawPin (juce::Graphics& g, juce::Rectangle<float> area)
 {
     g.setColour (juce::Colours::white.withAlpha (0.82f));
@@ -133,7 +165,9 @@ void ChordSequenceComponent::CardContent::setRows (std::vector<LearningRow> newR
                 || rows[index].formula != newRows[index].formula
                 || rows[index].bass != newRows[index].bass
                 || rows[index].numericDegree != newRows[index].numericDegree
-                || rows[index].durationBeats != newRows[index].durationBeats)
+                || rows[index].durationBeats != newRows[index].durationBeats
+                || rows[index].lengthExpression != newRows[index].lengthExpression
+                || rows[index].usesDefaultLength != newRows[index].usesDefaultLength)
             {
                 unchanged = false;
                 break;
@@ -269,7 +303,12 @@ void ChordSequenceComponent::CardContent::mouseMove (const juce::MouseEvent& eve
     text += "\n" + row.notes;
     if (row.bass.isNotEmpty())
         text += "\nBass: " + row.bass;
-    text += "\n" + formatBeats (row.durationBeats) + " beats";
+    text += "\nLength: " + (row.lengthExpression.isNotEmpty() ? row.lengthExpression
+                                                                 : juce::String ("4beats"));
+    text += " (" + juce::String::fromUTF8 (
+        chordtext::formatBeatCount (row.durationBeats).c_str()) + ")";
+    if (row.usesDefaultLength)
+        text += "\nDEFAULT";
     setTooltip (text);
 }
 
@@ -316,6 +355,7 @@ void ChordSequenceComponent::CardContent::paint (juce::Graphics& g)
 
         auto inner = card.toNearestInt().reduced (16, 12);
         auto titleRow = inner.removeFromTop (27);
+        const auto timingRow = inner.removeFromBottom (16);
 
         if (isManual)
         {
@@ -373,10 +413,13 @@ void ChordSequenceComponent::CardContent::paint (juce::Graphics& g)
                               juce::Justification::centredLeft, 1);
         }
 
-        g.setColour (dimTextColour);
-        g.setFont (juce::Font (juce::FontOptions (10.0f)));
-        g.drawText (formatBeats (rows[index].durationBeats) + " BEATS", inner,
-                    juce::Justification::bottomLeft, false);
+        g.setColour (rows[index].usesDefaultLength ? accentColour : dimTextColour);
+        g.setFont (juce::Font (juce::FontOptions (10.0f,
+                                                   rows[index].usesDefaultLength
+                                                       ? juce::Font::bold
+                                                       : juce::Font::plain)));
+        g.drawFittedText (formatCardTiming (rows[index]), timingRow,
+                          juce::Justification::bottomLeft, 1);
     }
 
     g.endTransparencyLayer();
@@ -404,6 +447,8 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     configureLabel (modeLabel, "MODE", dimTextColour, 11.0f);
     configureLabel (scaleSummaryLabel, {}, dimTextColour, 12.0f);
     scaleSummaryLabel.setComponentID ("scaleSummary");
+    configureLabel (defaultLengthLabel, "DEFAULT LENGTH", dimTextColour, 11.0f);
+    defaultLengthLabel.setComponentID ("defaultLengthLabel");
     configureLabel (bassLabel, "BASS", dimTextColour, 11.0f);
     bassLabel.setComponentID ("bassLabel");
     configureLabel (voicingLabel, "VOICING", dimTextColour, 11.0f);
@@ -471,12 +516,8 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     diagnosticsDisplay.setColour (juce::TextEditor::focusedOutlineColourId, outlineColour);
     diagnosticsDisplay.setFont (juce::Font (juce::FontOptions (12.0f)));
 
-    auto setUpCombo = [this] (juce::ComboBox& box, const char* parameterId)
+    auto styleAndAddCombo = [this] (juce::ComboBox& box)
     {
-        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (
-                processor.apvts.getParameter (parameterId)))
-            box.addItemList (choice->choices, 1);
-
         box.setColour (juce::ComboBox::backgroundColourId, panelColour);
         box.setColour (juce::ComboBox::textColourId, textColour);
         box.setColour (juce::ComboBox::outlineColourId, outlineColour);
@@ -484,11 +525,46 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
         editorContent.addAndMakeVisible (box);
     };
 
+    auto setUpCombo = [&] (juce::ComboBox& box, const char* parameterId)
+    {
+        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (
+                processor.apvts.getParameter (parameterId)))
+            box.addItemList (choice->choices, 1);
+
+        styleAndAddCombo (box);
+    };
+
     setUpCombo (keyBox, "key");
     setUpCombo (modeBox, "scaleMode");
     modeBox.setComponentID ("modeBox");
     setUpCombo (voicingBox, "voicing");
     setUpCombo (rangeBox, "range");
+    defaultLengthBox.setComponentID ("defaultLengthBox");
+    defaultLengthBox.addSectionHeading ("NOTES");
+    for (int index = 0; index <= 12; ++index)
+    {
+        const auto& preset = chordtext::lengthPresets()[static_cast<std::size_t> (index)];
+        defaultLengthBox.addItem (juce::String::fromUTF8 (preset.displayName.data(),
+                                                           static_cast<int> (preset.displayName.size())),
+                                  index + 1);
+    }
+    defaultLengthBox.addSectionHeading ("BEATS");
+    for (int index = 13; index <= 15; ++index)
+    {
+        const auto& preset = chordtext::lengthPresets()[static_cast<std::size_t> (index)];
+        defaultLengthBox.addItem (juce::String::fromUTF8 (preset.displayName.data(),
+                                                           static_cast<int> (preset.displayName.size())),
+                                  index + 1);
+    }
+    defaultLengthBox.addSectionHeading ("BARS");
+    for (int index = 16; index <= 18; ++index)
+    {
+        const auto& preset = chordtext::lengthPresets()[static_cast<std::size_t> (index)];
+        defaultLengthBox.addItem (juce::String::fromUTF8 (preset.displayName.data(),
+                                                           static_cast<int> (preset.displayName.size())),
+                                  index + 1);
+    }
+    styleAndAddCombo (defaultLengthBox);
     setUpCombo (bassBox, "bassOctaves");
     bassBox.setComponentID ("bassBox");
 
@@ -601,6 +677,7 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     editorContent.addAndMakeVisible (rangeLabel);
     editorContent.addAndMakeVisible (velocityLabel);
     editorContent.addAndMakeVisible (velocitySlider);
+    editorContent.addAndMakeVisible (defaultLengthLabel);
     editorContent.addAndMakeVisible (bassLabel);
     editorContent.addAndMakeVisible (loopButton);
     editorContent.addAndMakeVisible (exportButton);
@@ -620,6 +697,8 @@ ChordTextAudioProcessorEditor::ChordTextAudioProcessorEditor (ChordTextAudioProc
     voicingAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "voicing",
                                                              voicingBox);
     rangeAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "range", rangeBox);
+    defaultLengthAttachment = std::make_unique<ComboBoxAttachment> (
+        processor.apvts, "defaultLength", defaultLengthBox);
     bassAttachment = std::make_unique<ComboBoxAttachment> (processor.apvts, "bassOctaves",
                                                            bassBox);
     velocityAttachment = std::make_unique<SliderAttachment> (processor.apvts, "velocity",
@@ -745,9 +824,15 @@ void ChordTextAudioProcessorEditor::layoutContent()
     loopButton.setBounds (x, controlFields.getY(), loopWidth, controlFields.getHeight());
     const auto summaryRow = content.removeFromTop (28);
     constexpr int bassControlWidth = 224;
+    constexpr int defaultLengthControlWidth = 212;
     constexpr int summaryGap = 12;
     const auto bassControlX = summaryRow.getRight() - bassControlWidth;
-    scaleSummaryLabel.setBounds (summaryRow.withTrimmedRight (bassControlWidth + summaryGap));
+    const auto defaultLengthControlX = bassControlX - summaryGap - defaultLengthControlWidth;
+    scaleSummaryLabel.setBounds (summaryRow.withTrimmedRight (
+        bassControlWidth + defaultLengthControlWidth + summaryGap * 2));
+    defaultLengthLabel.setBounds (defaultLengthControlX, summaryRow.getY() + 6, 112, 16);
+    defaultLengthBox.setBounds (defaultLengthControlX + 112, summaryRow.getY(),
+                                defaultLengthControlWidth - 112, summaryRow.getHeight());
     bassLabel.setBounds (bassControlX, summaryRow.getY() + 6, 44, 16);
     bassBox.setBounds (bassControlX + 52, summaryRow.getY(), 172, summaryRow.getHeight());
     content.removeFromTop (4);
@@ -852,6 +937,8 @@ void ChordTextAudioProcessorEditor::refreshStatus()
         scaleSummaryLabel.setText (scaleSummary, juce::dontSendNotification);
     const auto diagnostics = processor.getDiagnostics();
     const auto rows = processor.getLearningRows();
+    const auto timing = processor.getPublishedTiming();
+    const auto timingPending = processor.isPlanRebuildPending();
     const auto shouldShowDiagnostics = ! textEditPending && ! diagnostics.empty();
     auto layoutChanged = diagnosticsDisplay.isVisible() != shouldShowDiagnostics
                          || lastTextEditPending != textEditPending;
@@ -892,6 +979,7 @@ void ChordTextAudioProcessorEditor::refreshStatus()
                               : juce::String();
 
     const auto sequenceStatus = textEditPending ? juce::String ("Updating preview")
+                               : timingPending ? juce::String ("Timing updating")
                                : ! diagnostics.empty()
                                    ? rows.empty() ? juce::String ("Fix progression errors")
                                                   : juce::String ("Last valid preview")
@@ -903,7 +991,8 @@ void ChordTextAudioProcessorEditor::refreshStatus()
                                : juce::String::fromUTF8 ("\xe2\x9c\x93  Valid progression");
     if (sequenceStatusLabel.getText() != sequenceStatus)
         sequenceStatusLabel.setText (sequenceStatus, juce::dontSendNotification);
-    const auto sequenceStatusColour = textEditPending ? juce::Colour (0xffd5aa61)
+    const auto sequenceStatusColour = textEditPending || timingPending
+                                           ? juce::Colour (0xffd5aa61)
                                        : ! diagnostics.empty() ? errorColour
                                        : rows.empty() ? dimTextColour : accentColour;
     if (sequenceStatusLabel.findColour (juce::Label::textColourId) != sequenceStatusColour)
@@ -914,18 +1003,20 @@ void ChordTextAudioProcessorEditor::refreshStatus()
     for (const auto& row : rows)
         totalBeats += row.durationBeats;
 
-    const auto sequenceMeta = rows.empty() ? juce::String ("No chords yet")
+    const auto timingText = timingPending ? juce::String ("Timing updating")
+                                          : formatTimingContext (timing);
+    const auto sequenceMeta = rows.empty() ? juce::String ("No chords yet  \xc2\xb7  ") + timingText
                                : juce::String (static_cast<int> (rows.size())) + " chords  \xc2\xb7  "
-                                     + formatBeats (totalBeats) + " beats";
+                                     + formatBeats (totalBeats) + " beats  \xc2\xb7  " + timingText;
     if (sequenceMetaLabel.getText() != sequenceMeta)
         sequenceMetaLabel.setText (sequenceMeta, juce::dontSendNotification);
     sequenceView.setRows (rows, processor.getCurrentStep(),
-                          textEditPending || ! diagnostics.empty(), previewCardRevision);
+                          textEditPending || timingPending || ! diagnostics.empty(), previewCardRevision);
     sequenceView.setPreviewFeedback (previewFeedback);
     refreshTransportStatus();
 
-    const bool canDrag = ! textEditPending && diagnostics.empty() && ! rows.empty();
-    clipDrag.setLoopInfo (totalBeats, canDrag);
+    const bool canDrag = ! textEditPending && ! timingPending && diagnostics.empty() && ! rows.empty();
+    clipDrag.setLoopInfo (totalBeats, canDrag, timing.settings.signature);
 
     // Check the last drag file only when its path changes instead of doing a
     // file-system stat on every 30 Hz timer tick. Reveal is session-only; an

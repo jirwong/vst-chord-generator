@@ -111,11 +111,13 @@ private:
     juce::Label rangeLabel;
     juce::Label velocityLabel;
     juce::Label scaleSummaryLabel;
+    juce::Label defaultLengthLabel;
     juce::Label bassLabel;
     juce::ComboBox keyBox;
     juce::ComboBox modeBox;
     juce::ComboBox voicingBox;
     juce::ComboBox rangeBox;
+    juce::ComboBox defaultLengthBox;
     juce::ComboBox bassBox;
     juce::Slider velocitySlider;
     juce::ToggleButton loopButton { "Loop" };
@@ -142,6 +144,7 @@ private:
     std::unique_ptr<ComboBoxAttachment> modeAttachment;
     std::unique_ptr<ComboBoxAttachment> voicingAttachment;
     std::unique_ptr<ComboBoxAttachment> rangeAttachment;
+    std::unique_ptr<ComboBoxAttachment> defaultLengthAttachment;
     std::unique_ptr<ComboBoxAttachment> bassAttachment;
     std::unique_ptr<SliderAttachment> velocityAttachment;
     std::unique_ptr<ButtonAttachment> loopAttachment;

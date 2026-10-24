@@ -27,22 +27,32 @@ juce::String formatNumber (double value)
     return text;
 }
 
-juce::String describeLoop (double beats)
+juce::String describeLoop (double beats, chordtext::TimeSignature signature)
 {
     if (beats <= 0.0)
         return "No loop";
 
-    return formatNumber (beats) + " beats \xc2\xb7 " + formatNumber (beats / 4.0)
-           + " bars (4/4)";
+    if (! chordtext::isValidTimeSignature (signature))
+        signature = {};
+
+    const auto beatsPerBar = static_cast<double> (signature.numerator) * 4.0
+                           / static_cast<double> (signature.denominator);
+    const auto bars = beats / beatsPerBar;
+    return formatNumber (beats) + " beats \xc2\xb7 " + formatNumber (bars)
+           + (std::abs (bars - 1.0) < 1.0e-9 ? " bar (" : " bars (")
+           + juce::String (signature.numerator) + "/" + juce::String (signature.denominator) + ")";
 }
 } // namespace
 
-void ClipDragComponent::setLoopInfo (double beats, bool enabled)
+void ClipDragComponent::setLoopInfo (double beats, bool enabled,
+                                     chordtext::TimeSignature signature)
 {
-    if (loopBeats == beats && canDrag == enabled && isEnabled() == enabled)
+    if (loopBeats == beats && loopSignature == signature && canDrag == enabled
+        && isEnabled() == enabled)
         return;
 
     loopBeats = beats;
+    loopSignature = signature;
     canDrag = enabled;
     setEnabled (enabled);
     repaint();
@@ -94,7 +104,7 @@ void ClipDragComponent::paint (juce::Graphics& g)
     const auto hint = loopBeats > 0.0 ? juce::String ("Fix errors to drag")
                                       : juce::String ("Enter a progression to drag");
 
-    g.drawText (enabled ? describeLoop (loopBeats) : hint,
+    g.drawText (enabled ? describeLoop (loopBeats, loopSignature) : hint,
                 detailArea, juce::Justification::centredLeft, true);
 }
 
